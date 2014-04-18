@@ -235,9 +235,12 @@ func (v *Device) verify() error {
 }
 
 func (v *Device) SetFormat(vf Format) error {
-	// var w, h, f C.uint
-	// C.get_v4l2_format(&vfmt, &w, &h, &f)
-	// askedfmt := f
+	if v.capturing {
+		return v.err("can't set format while capturing")
+	}
+	if len(v.buffers) > 0 {
+		return v.err("can't set format while buffers allocated")
+	}
 
 	if v.useV4lConvert {
 		if err := v.setFormatUseV4lConvert(vf); err != nil {
@@ -326,6 +329,13 @@ func (v *Device) GetSupportedFormats() ([]uint32, error) {
 // InitBuffers initializes capture buffers for the opened video device given by file.
 // Only the MMAP method is supported.
 func (v *Device) InitBuffers(n int) error {
+	if v.capturing {
+		return v.err("can't init buffers while capturing")
+	}
+	if len(v.buffers) > 0 {
+		return v.err("can't init buffers while buffers allocated")
+	}
+
 	var reqbufs C.struct_v4l2_requestbuffers
 	C.init_v4l2_requestbuffers(&reqbufs, C.int(n))
 	if errno := ioctl(v.file, C.VIDIOC_REQBUFS, unsafe.Pointer(&reqbufs)); errno != 0 {
@@ -360,6 +370,9 @@ func (v *Device) DoneBuffers() error {
 	if v.capturing {
 		return v.err("can't release buffers while capturing")
 	}
+	if len(v.buffers) == 0 {
+		return v.err("no buffers to release")
+	}
 
 	for _, buf := range v.buffers {
 		err := syscall.Munmap(buf)
@@ -372,6 +385,12 @@ func (v *Device) DoneBuffers() error {
 
 // Capture enables video capture once Open and InitBuffers have been called.
 func (v *Device) Capture() error {
+	if v.capturing {
+		return v.err("already capturing")
+	}
+	if len(v.buffers) == 0 {
+		return v.err("can't capture without buffers")
+	}
 	for i := range v.buffers {
 		var buf C.struct_v4l2_buffer
 		C.init_v4l2_buffer(&buf, C.int(i))
@@ -390,6 +409,9 @@ func (v *Device) Capture() error {
 
 // EndCapture turns off video capture.
 func (v *Device) EndCapture() error {
+	if !v.capturing {
+		return v.err("not capturing")
+	}
 	var buftype C.enum_v4l2_buf_type
 	buftype = C.V4L2_BUF_TYPE_VIDEO_CAPTURE
 	if errno := ioctl(v.file, C.VIDIOC_STREAMOFF, unsafe.Pointer(&buftype)); errno != 0 {
@@ -401,6 +423,9 @@ func (v *Device) EndCapture() error {
 
 // GetFrame returns the next frame from the capture stream.
 func (v *Device) GetFrame() (Frame, error) {
+	if !v.capturing {
+		return Frame{}, v.err("not capturing")
+	}
 	// log.Printf("waiting for fd=%d\n", file.Fd())
 	reqtime := time.Now()
 	r, errno := C.wait_for_fd(C.int(v.file.Fd()))
@@ -425,11 +450,12 @@ func (v *Device) GetFrame() (Frame, error) {
 // DoneFrame is used to return the buffer contained in Frame to the driver so it may be reused.
 // For best performance call DoneFrame as soon as possible after GetFrame.
 func (v *Device) DoneFrame(frame Frame) error {
-	if frame.bufnum == 0 {
+	realBufnum := int(frame.bufnum - 1)
+	if realBufnum < 0 || realBufnum >= len(v.buffers) {
 		return v.err("invalid buffer number in frame")
 	}
 	var buf C.struct_v4l2_buffer
-	C.init_v4l2_buffer(&buf, C.int(frame.bufnum-1))
+	C.init_v4l2_buffer(&buf, C.int(realBufnum))
 	if errno := ioctl(v.file, C.VIDIOC_QBUF, unsafe.Pointer(&buf)); errno != 0 {
 		return v.err("failed to ioctl VIDIOC_QBUF: errno=%d", errno)
 	}

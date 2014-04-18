@@ -142,8 +142,6 @@ func fetchImage(dev *v4l.Device, imageChan chan simage) {
 			frame = newFrame
 		}
 		logsince(start, "%d B got %s frame bytes=%d", i, *flagFormat, len(frame.Pix))
-
-		// TODO for compressed formats like JPEG, copy/release buffer before decoding
 		getImgStart := time.Now()
 		img, err := dev.GetImage(frame)
 		logsince(getImgStart, "%d C got image dim=%v err=%v", i, img.Bounds(), err)
