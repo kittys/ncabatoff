@@ -149,6 +149,10 @@ type Frame struct {
 	RecvTime time.Time
 }
 
+func (f Frame) GetBufNum() int {
+	return int(f.bufnum) - 1
+}
+
 // CopyPix is used to create a new frame with the same pix but no buffer reference,
 // allowing the existing one to be released with DoneFrame.
 func (f Frame) CopyPix() Frame {

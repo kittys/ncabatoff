@@ -2,12 +2,9 @@ package main
 
 import (
 	// "bytes"
-	"code.google.com/p/ncabatoff/imglib"
 	"code.google.com/p/ncabatoff/v4l"
 	"flag"
 	"fmt"
-	"image"
-	"image/jpeg"
 	"log"
 	"os"
 	"time"
@@ -18,14 +15,14 @@ import (
 type simage struct {
 	seq int
 	tm  time.Time
-	img image.Image
+	pix []byte
 }
 
 var flagInput = flag.String("in", "/dev/video0", "input capture device")
 var flagNumBufs = flag.Int("numbufs", 15, "number of mmap buffers")
 var flagWidth = flag.Int("width", 640, "width in pixels")
 var flagHeight = flag.Int("height", 480, "height in pixels")
-var flagFormat = flag.String("format", "yuv", "format yuv or rgb")
+var flagFormat = flag.String("format", "yuv", "format yuv or rgb or jpg")
 var flagFrames = flag.Int("frames", 0, "frames to capture")
 
 func main() {
@@ -44,7 +41,7 @@ func main() {
 		dev.DoneBuffers()
 		lp("close result: %v", dev.CloseDevice())
 	}(dev)
-	go fetchImage(dev, imageInChan)
+	go fetchImages(dev, imageInChan)
 
 	writeImages(imageInChan)
 }
@@ -97,14 +94,7 @@ func writeImages(in chan simage) {
 		start := time.Now()
 		file, err := os.Create(fname)
 		if err == nil {
-			switch *flagFormat {
-			case "yuv":
-				_, err = file.Write(simg.img.(*imglib.YUYV).Pix)
-			case "rgb":
-				_, err = file.Write(simg.img.(*imglib.RGB).Pix)
-			case "jpg":
-				err = jpeg.Encode(file, simg.img, nil)
-			}
+			_, err = file.Write(simg.pix)
 		}
 		logsince(start, "%d F wrote image %s, err=%v", i, fname, err)
 	}
@@ -118,40 +108,31 @@ func lp(fs string, opt ...interface{}) {
 	log.Printf("         %s", fmt.Sprintf(fs, opt...))
 }
 
-func fetchImage(dev *v4l.Device, imageChan chan simage) {
+func fetchImages(dev *v4l.Device, imageChan chan simage) {
 	lp("starting capture")
 	bufrel := make(chan v4l.Frame, *flagNumBufs)
 	go func(in chan v4l.Frame) {
 		for h := range in {
-			// start := time.Now()
+			start := time.Now()
 			err := dev.DoneFrame(h)
 			if err != nil {
 				log.Fatalf("error releasing frame: %v", err)
 			}
-			// logsince(start, "released buffer %d, err=%v", h, err)
+			logsince(start, "released buffer %d, err=%v", h.GetBufNum(), err)
 		}
 	}(bufrel)
 	i := 0
 	for {
 		start := time.Now()
 		frame, err := dev.GetFrame()
-		if *flagFormat == "jpg" {
-			// We want to release the buffer ASAP and decoding isn't fast...
-			newFrame := frame.CopyPix()
-			bufrel <- frame
-			frame = newFrame
-		}
-		logsince(start, "%d B got %s frame bytes=%d", i, *flagFormat, len(frame.Pix))
+		newFrame := frame.CopyPix()
+		bufrel <- frame
+		logsince(start, "%d B got %s frame bytes=%d", i, *flagFormat, len(newFrame.Pix))
 		getImgStart := time.Now()
-		img, err := dev.GetImage(frame)
-		logsince(getImgStart, "%d C got image dim=%v err=%v", i, img.Bounds(), err)
-		// give buffer back to v4l device if we haven't already
-		if *flagFormat != "jpg" {
-			bufrel <- frame
-		}
+		logsince(getImgStart, "%d C getImage err=%v", i, err)
 
 		if err == nil {
-			imageChan <- simage{img: img, seq: i, tm: frame.ReqTime}
+			imageChan <- simage{pix: newFrame.Pix, seq: i, tm: newFrame.ReqTime}
 		}
 		i++
 		if *flagFrames == i {
