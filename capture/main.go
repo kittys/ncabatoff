@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-	"image/png"
 	"log"
 	"os"
 	"time"
@@ -64,6 +63,7 @@ func initCaptureDevice(path string) *v4l.Device {
 	switch(*flagFormat) {
 	case "yuv": pxlfmt = v4l.FormatYuyv
 	case "rgb": pxlfmt = v4l.FormatRgb
+	case "jpg": pxlfmt = v4l.FormatJpeg
 	default: log.Fatalf("Unsupported format '%s'", *flagFormat)
 	}
 
@@ -102,8 +102,6 @@ func writeImages(in chan simage) {
 				_, err = file.Write(simg.img.(*imglib.YUYV).Pix)
 			case "rgb":
 				_, err = file.Write(simg.img.(*imglib.RGB).Pix)
-			case "png":
-				err = png.Encode(file, simg.img)
 			case "jpg":
 				err = jpeg.Encode(file, simg.img, nil)
 			}
@@ -137,17 +135,25 @@ func fetchImage(dev *v4l.Device, imageChan chan simage) {
 	for {
 		start := time.Now()
 		frame, err := dev.GetFrame()
-		// logsince(start, "%d B getframe=%v, buffer=%d, bytes=%d", i, err, h, len(b))
+		if *flagFormat == "jpg" {
+			// We want to release the buffer ASAP and decoding isn't fast...
+			newFrame := frame.CopyPix()
+			bufrel <- frame
+			frame = newFrame
+		}
+		logsince(start, "%d B got %s frame bytes=%d", i, *flagFormat, len(frame.Pix))
 
 		// TODO for compressed formats like JPEG, copy/release buffer before decoding
 		getImgStart := time.Now()
 		img, err := dev.GetImage(frame)
-		logsince(getImgStart, "%d C got image (%v), releasing buffer", i, err)
-		// give buffer back to v4l device
-		bufrel <- frame
+		logsince(getImgStart, "%d C got image dim=%v err=%v", i, img.Bounds(), err)
+		// give buffer back to v4l device if we haven't already
+		if *flagFormat != "jpg" {
+			bufrel <- frame
+		}
 
 		if err == nil {
-			imageChan <- simage{img: img, seq: i, tm: start}
+			imageChan <- simage{img: img, seq: i, tm: frame.ReqTime}
 		}
 		i++
 		if *flagFrames == i {

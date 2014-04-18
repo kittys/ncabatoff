@@ -117,10 +117,10 @@ import "time"
 import "unsafe"
 import "code.google.com/p/ncabatoff/imglib"
 
-// type V4lPixelFormat uint
 const (
 	FormatYuyv = C.V4L2_PIX_FMT_YUYV
 	FormatRgb = C.V4L2_PIX_FMT_RGB24
+	FormatJpeg = C.V4L2_PIX_FMT_JPEG
 )
 
 type Device struct {
@@ -139,11 +139,23 @@ type Format struct {
 	Format uint32
 }
 
+// bufId is the actual bufnum+1 - thus the zero value is an invalid bufnum
+type bufId int
+
 type Frame struct {
-	data []byte
-	bufnum int
-	reqtime time.Time
-	recvtime time.Time
+	bufnum bufId
+	Pix []byte
+	ReqTime time.Time
+	RecvTime time.Time
+}
+
+// CopyPix is used to create a new frame with the same pix but no buffer reference,
+// allowing the existing one to be released with DoneFrame.
+func (f Frame) CopyPix() Frame {
+	newFrame := Frame{ReqTime: f.ReqTime, RecvTime: f.RecvTime}
+	newFrame.Pix = make([]byte, len(f.Pix))
+	copy(newFrame.Pix, f.Pix)
+	return newFrame
 }
 
 func ioctl(file *os.File, req int, arg unsafe.Pointer) syscall.Errno {
@@ -387,7 +399,7 @@ func (v *Device) EndCapture() error {
 	return nil
 }
 
-// GetFrame returns a single frame captured from file along with the buffer number.
+// GetFrame returns the next frame from the capture stream.
 func (v *Device) GetFrame() (Frame, error) {
 	// log.Printf("waiting for fd=%d\n", file.Fd())
 	reqtime := time.Now()
@@ -404,37 +416,40 @@ func (v *Device) GetFrame() (Frame, error) {
 	if errno := ioctl(v.file, C.VIDIOC_DQBUF, unsafe.Pointer(&buf)); errno != 0 {
 		return Frame{}, v.err("failed to ioctl VIDIOC_DQBUF: errno=%d", errno)
 	}
-	f := Frame{recvtime: time.Now(), reqtime: reqtime}
-	f.data, f.bufnum = v.buffers[buf.index], int(buf.index)
+	f := Frame{RecvTime: time.Now(), ReqTime: reqtime}
+	f.Pix, f.bufnum = v.buffers[buf.index], bufId(int(buf.index)+1)
 	// log.Printf("success! bytesused=%d, length=%d\n", buf.bytesused, buf.length)
 	return f, nil
 }
 
-// DoneFrame is used to return the buffer i to the driver so it may be reused.
+// DoneFrame is used to return the buffer contained in Frame to the driver so it may be reused.
 // For best performance call DoneFrame as soon as possible after GetFrame.
 func (v *Device) DoneFrame(frame Frame) error {
+	if frame.bufnum == 0 {
+		return v.err("invalid buffer number in frame")
+	}
 	var buf C.struct_v4l2_buffer
-	C.init_v4l2_buffer(&buf, C.int(frame.bufnum))
+	C.init_v4l2_buffer(&buf, C.int(frame.bufnum-1))
 	if errno := ioctl(v.file, C.VIDIOC_QBUF, unsafe.Pointer(&buf)); errno != 0 {
 		return v.err("failed to ioctl VIDIOC_QBUF: errno=%d", errno)
 	}
 	return nil
 }
 
-// GetImageFromFrame interprets the buffer b returned by GetFrame using pxlfmt, width, and height. 
-// The result is retuned as an image if possible.  Supported formats: YUYV returns a *imglib.YUYV, RGB24 returns a *imglib.RGB, and JPEG returns a image.Jpeg.
+// GetImage builds an Image from the provided Frame.
+// Supported formats: YUYV returns a *imglib.YUYV, RGB24 returns a *imglib.RGB, and JPEG returns a image.Jpeg.
 func (v *Device) GetImage(frame Frame) (image.Image, error) {
 	switch v.format.Format {
 	case C.V4L2_PIX_FMT_YUYV:
 		img := imglib.NewYUYV(image.Rect(0, 0, v.format.Width, v.format.Height))
-		copy(img.Pix, frame.data)
+		copy(img.Pix, frame.Pix)
 		return img, nil
 	case C.V4L2_PIX_FMT_RGB24:
 		img := imglib.NewRGB(image.Rect(0, 0, v.format.Width, v.format.Height))
-		copy(img.Pix, frame.data)
+		copy(img.Pix, frame.Pix)
 		return img, nil
 	case C.V4L2_PIX_FMT_JPEG:
-		if img, _, err := image.Decode(bytes.NewReader(frame.data)); err != nil {
+		if img, _, err := image.Decode(bytes.NewReader(frame.Pix)); err != nil {
 			return nil, err
 		} else {
 			return img, nil
