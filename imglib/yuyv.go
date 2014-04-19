@@ -1,5 +1,6 @@
 package imglib
 
+import "fmt"
 import "image"
 import "image/color"
 import "io"
@@ -24,7 +25,7 @@ type YUYV struct {
 func NewYUYV(r image.Rectangle) *YUYV {
 	w, h := r.Dx(), r.Dy()
 	buf := make([]uint8, yuyvBytesPP*w*h)
-	return &YUYV{buf, yuyvBytesPP*w, r}
+	return &YUYV{buf, yuyvBytesPP * w, r}
 }
 
 // ColorModel returns image/color.YCbCrModel, which I think is not quite
@@ -249,15 +250,41 @@ func (img *YUYV) StoreRaw(path string) error {
 	return ioutil.WriteFile(path, img.Pix, 0644)
 }
 
-// LoadRaw reads path to populate img.Pix, returning an error if the open or read
-// returned an error or if the read yields fewer than len(img.Pix) bytes.
-func (img *YUYV) LoadRaw(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
+func (img *YUYV) loadRaw(file *os.File) error {
 	defer func(f *os.File) { f.Close() }(file)
-	_, err = io.ReadFull(file, img.Pix)
+	_, err := io.ReadFull(file, img.Pix)
 	return err
 }
 
+// LoadRaw reads path to populate img.Pix, returning an error if the open or read
+// returned an error or if the read yields fewer than len(img.Pix) bytes.
+func (img *YUYV) LoadRaw(path string) error {
+	if file, err := os.Open(path); err != nil {
+		return err
+	} else {
+		return img.loadRaw(file)
+	}
+}
+
+func NewYUYVFromFile(path string) (*YUYV, error) {
+	var yuyv *YUYV
+	if file, err := os.Open(path); err != nil {
+		return nil, err
+	} else if fi, err := file.Stat(); err != nil {
+		return nil, err
+	} else {
+		r := image.Rectangle{}
+		switch fi.Size() / 2 {
+		case 640 * 480:
+			r.Max = image.Point{640, 480}
+		case 320 * 240:
+			r.Max = image.Point{320, 240}
+		default:
+			return nil, fmt.Errorf("unknown dims, filesize=%d", fi.Size())
+		}
+
+		yuyv = NewYUYV(r)
+		yuyv.loadRaw(file)
+		return yuyv, nil
+	}
+}
