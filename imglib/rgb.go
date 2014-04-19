@@ -177,27 +177,6 @@ func (img *RGB) LoadRaw(path string) error {
 	}
 }
 
-// ToRGBA returns an RGBA image built from RGB by providing 0xFF for the alpha channel.
-func (img *RGB) ToRGBA() *image.RGBA {
-	rgba := image.NewRGBA(image.Rect(0, 0, img.Rect.Dx(), img.Rect.Dy()))
-	po := 0
-	pi := img.PixOffset(img.Rect.Min.X, img.Rect.Min.Y)
-	skip := img.Stride - 3*(img.Rect.Dx())
-	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
-		endi := pi + 3*img.Rect.Dx()
-		for pi < endi {
-			rgba.Pix[po+0] = img.Pix[pi+0]
-			rgba.Pix[po+1] = img.Pix[pi+1]
-			rgba.Pix[po+2] = img.Pix[pi+2]
-			rgba.Pix[po+3] = 0xFF
-			po += 4
-			pi += 3
-		}
-		pi += skip
-	}
-	return rgba
-}
-
 // NewRGBFromRGBA returns an RGB image built from rgba by discarding the alpha channel.
 func NewRGBFromRGBADropAlpha(rgba *image.RGBA) *RGB {
 	rgb := NewRGB(image.Rect(0, 0, rgba.Rect.Dx(), rgba.Rect.Dy()))

@@ -200,58 +200,6 @@ func (img *YUYV) ToRGBMinZp(dest []byte, or, og, ob, xs int) {
 	}
 }
 
-// ToRGB is the fastest converter to packed RGB available in this package.
-func (img *YUYV) ToRGB(dest []byte) {
-	j := 0
-	width := img.Rect.Dx()
-	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
-		i := img.PixOffset(img.Rect.Min.X, y)
-		end := i + width*yuyvBytesPP
-		for i < end {
-			yy1, yy2 := int(img.Pix[i+0])<<16+1<<15, int(img.Pix[i+2])<<16+1<<15
-			cb1, cr1 := int(img.Pix[i+1])-128, int(img.Pix[i+3])-128
-			t1, t2, t3, t4 := 91881*cr1, 46802*cr1, 22554*cb1, 116130*cb1
-
-			r1, g1, b1 := (yy1+t1)>>16, (yy1-t3-t2)>>16, (yy1+t4)>>16
-			r2, g2, b2 := (yy2+t1)>>16, (yy2-t3-t2)>>16, (yy2+t4)>>16
-			if r1 < 0 {
-				r1 = 0
-			} else if r1 > 255 {
-				r1 = 255
-			}
-			if g1 < 0 {
-				g1 = 0
-			} else if g1 > 255 {
-				g1 = 255
-			}
-			if b1 < 0 {
-				b1 = 0
-			} else if b1 > 255 {
-				b1 = 255
-			}
-			if r2 < 0 {
-				r2 = 0
-			} else if r2 > 255 {
-				r2 = 255
-			}
-			if g2 < 0 {
-				g2 = 0
-			} else if g2 > 255 {
-				g2 = 255
-			}
-			if b2 < 0 {
-				b2 = 0
-			} else if b2 > 255 {
-				b2 = 255
-			}
-
-			dest[j+0], dest[j+1], dest[j+2] = byte(r1), byte(g1), byte(b1)
-			dest[j+3], dest[j+4], dest[j+5] = byte(r2), byte(g2), byte(b2)
-			i, j = i+4, j+6
-		}
-	}
-}
-
 // SubImage returns an image representing the portion of the image img visible
 // through r. The returned value shares pixels with the original image.
 func (img *YUYV) SubImage(r image.Rectangle) image.Image {
@@ -312,3 +260,4 @@ func (img *YUYV) LoadRaw(path string) error {
 	_, err = io.ReadFull(file, img.Pix)
 	return err
 }
+
