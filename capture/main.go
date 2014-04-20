@@ -5,9 +5,10 @@ import (
 	"code.google.com/p/ncabatoff/v4l"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"time"
+	"runtime"
+	"github.com/golang/glog"
 )
 
 // import "github.com/davecheney/profile"
@@ -19,21 +20,23 @@ type simage struct {
 }
 
 var flagInput = flag.String("in", "/dev/video0", "input capture device")
-var flagNumBufs = flag.Int("numbufs", 15, "number of mmap buffers")
+var flagOutfile = flag.String("outfile", "", "write frames consecutively to output file, overwriting if exists")
+var flagNumBufs = flag.Int("numbufs", 30, "number of mmap buffers")
 var flagWidth = flag.Int("width", 640, "width in pixels")
 var flagHeight = flag.Int("height", 480, "height in pixels")
 var flagFormat = flag.String("format", "yuv", "format yuv or rgb or jpg")
 var flagFrames = flag.Int("frames", 0, "frames to capture")
+var flagDiscard = flag.Bool("discard", false, "discard frames")
 
 func main() {
 	// defer profile.Start(profile.MemProfile).Stop()
 
-	// log.SetFlags(log.Ltime | log.Lmicroseconds | log.Lshortfile)
-	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	flag.Parse()
 
 	// imageInChan is where images enter the system
-	imageInChan := make(chan simage, 100)
+	imageInChan := make(chan simage)
 
 	dev := initCaptureDevice(*flagInput)
 	defer func(dev *v4l.Device) {
@@ -43,25 +46,40 @@ func main() {
 	}(dev)
 	go fetchImages(dev, imageInChan)
 
-	writeImages(imageInChan)
+	if *flagDiscard {
+		for _ = range imageInChan {
+		}
+	} else if *flagOutfile != "" {
+		if outfile, err := os.OpenFile(*flagOutfile, os.O_WRONLY|os.O_CREATE, 0777); err != nil {
+			glog.Fatalf("unable to open output '%s': %v", *flagOutfile, err)
+		} else {
+			for simg := range imageInChan {
+				if _, err = outfile.Write(simg.pix); err != nil {
+					glog.Fatalf("error writing frame %d: %v", simg.seq, err)
+				}
+			}
+		}
+	} else {
+		writeImages(imageInChan)
+	}
 }
 
 func initCaptureDevice(path string) *v4l.Device {
 	dev, err := v4l.OpenDevice(path, false)
 	if err != nil {
-		log.Fatalf("%v", err)
+		glog.Fatalf("%v", err)
 	}
 
 	fmts, err := dev.GetSupportedFormats()
 	if err != nil {
-		log.Fatalf("%v", err)
+		glog.Fatalf("%v", err)
 	}
 	pxlfmt := uint32(0)
 	switch(*flagFormat) {
 	case "yuv": pxlfmt = v4l.FormatYuyv
 	case "rgb": pxlfmt = v4l.FormatRgb
 	case "jpg": pxlfmt = v4l.FormatJpeg
-	default: log.Fatalf("Unsupported format '%s'", *flagFormat)
+	default: glog.Fatalf("Unsupported format '%s'", *flagFormat)
 	}
 
 	found := false
@@ -71,17 +89,17 @@ func initCaptureDevice(path string) *v4l.Device {
 		}
 	}
 	if !found {
-		log.Fatalf("requested format %s not supported by device", *flagFormat)
+		glog.Fatalf("requested format %s not supported by device", *flagFormat)
 	}
 
 	dev.SetFormat(v4l.Format{Height: *flagHeight, Width: *flagWidth, Format: pxlfmt})
 
 	lp("supported formats: %v", fmts)
 	if err = dev.InitBuffers(*flagNumBufs); err != nil {
-		log.Fatalf("init=%v", err)
+		glog.Fatalf("init=%v", err)
 	}
 	if err = dev.Capture(); err != nil {
-		log.Fatalf("capture=%v", err)
+		glog.Fatalf("capture=%v", err)
 	}
 	return dev
 }
@@ -101,11 +119,11 @@ func writeImages(in chan simage) {
 }
 
 func logsince(start time.Time, fs string, opt ...interface{}) {
-	log.Printf("[%.3fs] %s", time.Since(start).Seconds(), fmt.Sprintf(fs, opt...))
+	glog.V(1).Infof("[%.3fs] %s", time.Since(start).Seconds(), fmt.Sprintf(fs, opt...))
 }
 
 func lp(fs string, opt ...interface{}) {
-	log.Printf("         %s", fmt.Sprintf(fs, opt...))
+	glog.V(1).Infof("         %s", fmt.Sprintf(fs, opt...))
 }
 
 func fetchImages(dev *v4l.Device, imageChan chan simage) {
@@ -116,7 +134,7 @@ func fetchImages(dev *v4l.Device, imageChan chan simage) {
 			start := time.Now()
 			err := dev.DoneFrame(h)
 			if err != nil {
-				log.Fatalf("error releasing frame: %v", err)
+				glog.Fatalf("error releasing frame: %v", err)
 			}
 			logsince(start, "released buffer %d, err=%v", h.GetBufNum(), err)
 		}
@@ -127,9 +145,7 @@ func fetchImages(dev *v4l.Device, imageChan chan simage) {
 		frame, err := dev.GetFrame()
 		newFrame := frame.CopyPix()
 		bufrel <- frame
-		logsince(start, "%d B got %s frame bytes=%d", i, *flagFormat, len(newFrame.Pix))
-		getImgStart := time.Now()
-		logsince(getImgStart, "%d C getImage err=%v", i, err)
+		logsince(start, "%d got %s frame bytes=%d", i, *flagFormat, len(newFrame.Pix))
 
 		if err == nil {
 			imageChan <- simage{pix: newFrame.Pix, seq: i, tm: newFrame.ReqTime}
@@ -139,6 +155,6 @@ func fetchImages(dev *v4l.Device, imageChan chan simage) {
 			close(imageChan)
 			break
 		}
-		logsince(start, "%d A frame complete, fetching next frame", i)
+		logsince(start, "%d frame complete, fetching next frame", i)
 	}
 }
