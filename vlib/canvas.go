@@ -7,6 +7,7 @@ import (
 
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xgraphics"
+	"github.com/golang/glog"
 )
 
 var imgs = []*xgraphics.Image{}
@@ -248,7 +249,7 @@ func draw(ximg *xgraphics.Image) *xgraphics.Image {
 	*/
 
 	if err := newximg.CreatePixmap(); err != nil {
-		errLg.Fatal(err)
+		glog.Fatal(err)
 	}
 	newximg.XDraw()
 	return &newximg

@@ -3,6 +3,7 @@ package vlib
 import (
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
+	"github.com/golang/glog"
 )
 
 var (
@@ -60,7 +61,7 @@ func ViewImages(fetcher ImageFetcher) {
 	// Connect to X and quit if we fail.
 	X, err := xgbutil.NewConn()
 	if err != nil {
-		errLg.Fatal(err)
+		glog.Fatal(err)
 	}
 
 	// Create the X window before starting anything so that the user knows

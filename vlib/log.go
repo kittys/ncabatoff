@@ -2,38 +2,23 @@ package vlib
 
 import (
 	"fmt"
-	"log"
-	"os"
 	"time"
 )
-import "github.com/seehuhn/trace"
-
-var listener trace.ListenerHandle
-
-func init() {
-    listener = trace.Register(printTrace, "vlib", trace.PrioAll)
-}
-
-func printTrace(t time.Time, path string, prio trace.Priority, msg string) {
-    caller := trace.Callers()[1]
-    fmt.Printf("%s %s %s %s\n", t.Format("15:04:05.000"), path, caller, msg)
-}
+import "github.com/golang/glog"
 
 func dbg(ctx string, format string, args ...interface{}) {
-    trace.T("vlib/" + ctx, trace.PrioDebug, format, args...)
+	glog.V(2).Infof(format, args...)
 }
 
-var errLg = log.New(os.Stderr, "[vlib error] ", log.Lshortfile)
-
 // lg is a convenient alias for printing verbose output.
-func lg(format string, v ...interface{}) {
-	log.Printf(format, v...)
+func lg(format string, args ...interface{}) {
+	glog.V(1).Infof(format, args...)
 }
 
 func logsince(start time.Time, fs string, opt ...interface{}) {
-	log.Printf("[%.3fs] %s", time.Since(start).Seconds(), fmt.Sprintf(fs, opt...))
+	lg("[%.3fs] %s", time.Since(start).Seconds(), fmt.Sprintf(fs, opt...))
 }
 
 func lp(fs string, opt ...interface{}) {
-		log.Printf("         %s", fmt.Sprintf(fs, opt...))
+	lg("         %s", fmt.Sprintf(fs, opt...))
 }

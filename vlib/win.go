@@ -14,6 +14,8 @@ import (
 	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xgraphics"
 	"github.com/BurntSushi/xgbutil/xwindow"
+
+	"github.com/golang/glog"
 )
 
 const flagStepIncrement = 20
@@ -46,7 +48,7 @@ type window struct {
 func newWindow(X *xgbutil.XUtil, width, height int) *window {
 	xwin, err := xwindow.Generate(X)
 	if err != nil {
-		errLg.Fatalf("Could not create window: %s", err)
+		glog.Fatalf("Could not create window: %s", err)
 	}
 
 	w := &window{
@@ -66,7 +68,7 @@ func (w *window) create(width, height int) {
 	err := w.CreateChecked(w.X.RootWin(), 0, 0, width, height,
 		xproto.CwBackPixel, 0xffffff)
 	if err != nil {
-		errLg.Fatalf("Could not create window: %s", err)
+		glog.Fatalf("Could not create window: %s", err)
 	}
 
 	// Make the window close gracefully using the WM_DELETE_WINDOW protocol.
@@ -162,7 +164,7 @@ func (w *window) setupEventHandlers(chans chans) {
 	// (or have already missed it).
 	_, err := w.Geometry()
 	if err != nil {
-		errLg.Fatal(err)
+		glog.Fatal(err)
 	}
 
 	// And ask the canvas to draw the first image when it gets around to it.
@@ -209,7 +211,7 @@ func (w *window) setupEventHandlers(chans chans) {
 				keyb.action(w)
 			}).Connect(w.X, w.Id, keyb.Key, false)
 		if err != nil {
-			errLg.Println(err)
+			glog.Errorln(err)
 		}
 	}
 }
