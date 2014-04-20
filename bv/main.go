@@ -11,11 +11,14 @@ import (
 	_ "image/png"
 	"log"
 	"os"
+	"io"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"syscall"
 	"time"
+	"github.com/golang/glog"
 )
 
 var (
@@ -76,7 +79,7 @@ func init() {
 
 	// Do some error checking on the flag values... naughty!
 	if flagWidth == 0 || flagHeight == 0 {
-		errLg.Fatal("The width and height must be non-zero values.")
+		glog.Fatal("The width and height must be non-zero values.")
 	}
 }
 
@@ -135,7 +138,7 @@ func (dl DirList) ImgInfos() []ImgInfo {
 func timeFromFname(fname string) *time.Time {
 	epochNanos := int64(0)
 	if _, err := fmt.Sscanf(fname[4:], "%d", &epochNanos); err != nil {
-		// errLg.Printf("Could not get time from fname=%s: %v", fname, err)
+		// glog.Errorf("Could not get time from fname=%s: %v", fname, err)
 		return nil
 	}
 	t := time.Unix(0, epochNanos)
@@ -196,7 +199,7 @@ func main() {
 	if len(flagProfile) > 0 {
 		f, err := os.Create(flagProfile)
 		if err != nil {
-			errLg.Fatal(err)
+			glog.Fatal(err)
 		}
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()
@@ -205,16 +208,29 @@ func main() {
 	// Whoops!
 	if flag.NArg() == 0 {
 		fmt.Fprint(os.Stderr, "\n")
-		errLg.Print("No images specified.\n\n")
+		glog.Errorf("No images specified.\n\n")
 		usage()
 	}
 
-	dl := getDirList(flag.Arg(0))
+	fi, err := os.Stat(flag.Arg(0))
+	if err != nil {
+		log.Fatalf("unable to stat input '%s': %v", flag.Arg(0), err)
+	}
+	if fi.IsDir() {
+		viewDir(flag.Arg(0))
+	} else if fi.Mode().IsRegular() {
+		viewFileMmap(flag.Arg(0))
+	} else {
+		viewDevice(flag.Arg(0))
+	}
+}
 
+func viewDir(path string) {
+	dl := getDirList(path)
 	imgs := make([]Img, 0, 100)
-
 	imagechan := make(chan Img)
 	go loadImages(dl, imagechan)
+
 	for img := range imagechan {
 		imgs = append(imgs, img)
 	}
@@ -229,5 +245,87 @@ func main() {
 			i = len(imgs) - 1
 		}
 		return i, []image.Image{imgs[i].Image}
+	})
+}
+
+func viewFileMmap(path string) {
+	rect := image.Rect(0, 0, flagWidth, flagHeight)
+	imgsize := 2*(rect.Size().X * rect.Size().Y)
+	var buffer []byte
+	var fileSize int64
+	if fl, err := os.Open(path); err != nil {
+		log.Fatalf("unable to open %s: %v", path, err)
+	} else {
+		if fi, err := fl.Stat(); err != nil {
+			log.Fatalf("unable to stat %s: %v", path, err)
+		} else {
+			fileSize = fi.Size()
+		}
+
+		if buffer, err = syscall.Mmap(int(fl.Fd()), 0, int(fileSize),
+				syscall.PROT_READ, syscall.MAP_SHARED); err != nil {
+			log.Fatalf("unable to mmap %s: %v", path, err )
+		}
+	}
+	numimgs := int(fileSize) / imgsize
+
+	defer func(buf []byte) {
+		err := syscall.Munmap(buf)
+		lp("unmap err=%v", err)
+	}(buffer)
+
+	vlib.ViewImages(func(i int) (int, []image.Image) {
+		lg("got %d", i)
+		if i >= numimgs {
+			i = 0
+		}
+		if i < 0 {
+			i = numimgs - 1
+		}
+		pix := buffer[imgsize*i:imgsize*i+imgsize]
+		yuyv := imglib.YUYV{Pix: pix, Stride: rect.Dx()*2, Rect: rect}
+		return i, []image.Image{imglib.StdImage{&yuyv}.GetRGBA()}
+	})
+}
+
+func getFileAndSize(path string) (*os.File, int64) {
+	if fl, err := os.Open(path); err != nil {
+		log.Fatalf("unable to open %s: %v", path, err)
+	} else {
+		if fi, err := fl.Stat(); err != nil {
+			log.Fatalf("unable to stat %s: %v", path, err)
+		} else {
+			return fl, fi.Size()
+		}
+	}
+	return nil, 0
+}
+
+func viewDevice(path string) {
+	rect := image.Rect(0, 0, flagWidth, flagHeight)
+	imgsize := 2*(rect.Size().X * rect.Size().Y)
+	fl, _ := getFileAndSize(path)
+	// lp("devsize=%d", devSize)
+	// numimgs := int(devSize) / imgsize
+
+	lasti := -1
+	yuyv := imglib.NewYUYV(rect)
+	vlib.ViewImages(func(i int) (int, []image.Image) {
+		lg("got %d", i)
+		if i != lasti+1 {
+			if newpos, err := fl.Seek(int64(i*imgsize), os.SEEK_SET); err != nil {
+				log.Fatalf("seek failure: lastpos=%d, endpos=%d, err=%v", lasti*imgsize, newpos, err)
+			}
+		}
+
+		if _, err := fl.Read(yuyv.Pix); err != nil {
+			if err != io.EOF {
+				log.Fatalf("error reading: %v", err)
+			} else {
+				lasti = i
+			}
+		}
+
+		return i, []image.Image{imglib.StdImage{yuyv}.GetRGBA()}
 	})
 }
