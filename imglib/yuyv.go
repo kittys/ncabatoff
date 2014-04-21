@@ -251,7 +251,6 @@ func (img *YUYV) StoreRaw(path string) error {
 }
 
 func (img *YUYV) loadRaw(file *os.File) error {
-	defer func(f *os.File) { f.Close() }(file)
 	_, err := io.ReadFull(file, img.Pix)
 	return err
 }
@@ -262,6 +261,7 @@ func (img *YUYV) LoadRaw(path string) error {
 	if file, err := os.Open(path); err != nil {
 		return err
 	} else {
+		defer file.Close()
 		return img.loadRaw(file)
 	}
 }
