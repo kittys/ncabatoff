@@ -34,6 +34,9 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	flag.Parse()
+	defer func() {
+		glog.Flush()
+	}()
 
 	// imageInChan is where images enter the system
 	imageInChan := make(chan simage)

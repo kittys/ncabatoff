@@ -80,6 +80,10 @@ func usage() {
 }
 
 func main() {
+	defer func() {
+		glog.Flush()
+	}()
+
 	// If we just need the keybindings, print them and be done.
 	if flagKeybindings {
 		for _, keyb := range vlib.Keybinds {
