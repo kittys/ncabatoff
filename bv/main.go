@@ -2,6 +2,7 @@ package main
 
 import (
 	"code.google.com/p/ncabatoff/imglib"
+	"code.google.com/p/ncabatoff/imgseq"
 	"code.google.com/p/ncabatoff/vlib"
 	"flag"
 	"fmt"
@@ -9,23 +10,16 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"log"
 	"os"
 	"io"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"sort"
 	"syscall"
-	"time"
 	"github.com/golang/glog"
 )
 
 var (
-	// When flagVerbose is true, logging output will be written to stderr.
-	// Errors will always be written to stderr.
-	flagVerbose bool
-
 	// The initial width and height of the window.
 	flagWidth, flagHeight int
 
@@ -53,12 +47,7 @@ func init() {
 	// Set GOMAXPROCS, since bv can benefit greatly from parallelism.
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	// Set the prefix for verbose output.
-	log.SetPrefix("[bv] ")
-
 	// Set all of the flags.
-	flag.BoolVar(&flagVerbose, "v", false,
-		"If set, logging output will be printed to stderr.")
 	flag.IntVar(&flagWidth, "width", 480,
 		"The initial width of the window.")
 	flag.IntVar(&flagHeight, "height", 600,
@@ -88,100 +77,6 @@ func usage() {
 		filepath.Base(os.Args[0]))
 	flag.PrintDefaults()
 	os.Exit(1)
-}
-
-// ImgInfo identifies images by providing them a unique id, a timestamp, and a path to the file.
-type ImgInfo struct {
-	SeqNum     int
-	CreationTs time.Time
-	Path       string
-}
-
-type Img struct {
-	ImgInfo
-	image.Image
-}
-
-type DirList struct {
-	// path to dir
-	path string
-	// contents (filenames) under path
-	files []string
-}
-
-func getDirList(dir string) (dl DirList) {
-	fd, _ := os.Open(dir)
-	fs, _ := fd.Readdirnames(0)
-	dl.path = dir
-	for _, f := range fs {
-		// TODO filter by regexp
-		if filepath.Ext(f) != "" {
-			dl.files = append(dl.files, f)
-		}
-	}
-	sort.Sort(sort.StringSlice(dl.files))
-	return
-}
-
-func (dl DirList) ImgInfos() []ImgInfo {
-	ret := make([]ImgInfo, len(dl.files))
-	for i := range dl.files {
-		ret[i] = ImgInfo{Path: filepath.Join(dl.path, dl.files[i])}
-		ret[i].SeqNum = i
-		if t := timeFromFname(dl.files[i]); t != nil {
-			ret[i].CreationTs = *t
-		}
-	}
-	return ret
-}
-
-func timeFromFname(fname string) *time.Time {
-	epochNanos := int64(0)
-	if _, err := fmt.Sscanf(fname[4:], "%d", &epochNanos); err != nil {
-		// glog.Errorf("Could not get time from fname=%s: %v", fname, err)
-		return nil
-	}
-	t := time.Unix(0, epochNanos)
-	return &t
-}
-
-// Read and possibly convert or decode the input file
-func loadImage(path string) (image.Image, error) {
-	if filepath.Ext(path) == ".yuv" {
-		if yuyv, err := imglib.NewYUYVFromFile(path); err != nil {
-			return nil, err
-		} else {
-			// It's faster to convert to RGBA and then to BGR (xgbutil.Image)
-			// than it is to use the generic xgbutil conversion code:
-			return imglib.StdImage{yuyv}.GetRGBA(), nil
-		}
-	}
-
-	if file, err := os.Open(path); err != nil {
-		return nil, err
-	} else {
-		defer file.Close()
-		img, _, err := image.Decode(file)
-		return img, err
-	}
-}
-
-func loadImg(iinfo ImgInfo) (Img, error) {
-	image, err := loadImage(iinfo.Path)
-	if err != nil {
-		return Img{}, err
-	}
-	return Img{ImgInfo: iinfo, Image: image}, nil
-}
-
-func loadImages(dl DirList, imagechan chan Img) {
-	for _, f := range dl.ImgInfos() {
-		img, err := loadImg(f)
-		if err == nil {
-			imagechan <- img
-		}
-	}
-	close(imagechan)
 }
 
 func main() {
@@ -214,7 +109,7 @@ func main() {
 
 	fi, err := os.Stat(flag.Arg(0))
 	if err != nil {
-		log.Fatalf("unable to stat input '%s': %v", flag.Arg(0), err)
+		glog.Fatalf("unable to stat input '%s': %v", flag.Arg(0), err)
 	}
 	if fi.IsDir() {
 		viewDir(flag.Arg(0))
@@ -226,16 +121,16 @@ func main() {
 }
 
 func viewDir(path string) {
-	dl := getDirList(path)
-	imgs := make([]Img, 0, 100)
-	imagechan := make(chan Img)
-	go loadImages(dl, imagechan)
+	dl := imgseq.GetDirList(path)
+	imgs := make([]imgseq.Img, 0, 100)
+	imagechan := make(chan imgseq.Img)
+	go imgseq.LoadImages(dl, imagechan)
 
 	for img := range imagechan {
 		imgs = append(imgs, img)
 	}
 
-	log.Printf("starting viewer for %d images", len(imgs))
+	glog.Infof("starting viewer for %d images", len(imgs))
 	vlib.ViewImages(func(i int) (int, []image.Image) {
 		lg("got %d", i)
 		if i >= len(imgs) {
@@ -254,17 +149,17 @@ func viewFileMmap(path string) {
 	var buffer []byte
 	var fileSize int64
 	if fl, err := os.Open(path); err != nil {
-		log.Fatalf("unable to open %s: %v", path, err)
+		glog.Fatalf("unable to open %s: %v", path, err)
 	} else {
 		if fi, err := fl.Stat(); err != nil {
-			log.Fatalf("unable to stat %s: %v", path, err)
+			glog.Fatalf("unable to stat %s: %v", path, err)
 		} else {
 			fileSize = fi.Size()
 		}
 
 		if buffer, err = syscall.Mmap(int(fl.Fd()), 0, int(fileSize),
 				syscall.PROT_READ, syscall.MAP_SHARED); err != nil {
-			log.Fatalf("unable to mmap %s: %v", path, err )
+			glog.Fatalf("unable to mmap %s: %v", path, err )
 		}
 	}
 	numimgs := int(fileSize) / imgsize
@@ -290,10 +185,10 @@ func viewFileMmap(path string) {
 
 func getFileAndSize(path string) (*os.File, int64) {
 	if fl, err := os.Open(path); err != nil {
-		log.Fatalf("unable to open %s: %v", path, err)
+		glog.Fatalf("unable to open %s: %v", path, err)
 	} else {
 		if fi, err := fl.Stat(); err != nil {
-			log.Fatalf("unable to stat %s: %v", path, err)
+			glog.Fatalf("unable to stat %s: %v", path, err)
 		} else {
 			return fl, fi.Size()
 		}
@@ -314,13 +209,13 @@ func viewDevice(path string) {
 		lg("got %d", i)
 		if i != lasti+1 {
 			if newpos, err := fl.Seek(int64(i*imgsize), os.SEEK_SET); err != nil {
-				log.Fatalf("seek failure: lastpos=%d, endpos=%d, err=%v", lasti*imgsize, newpos, err)
+				glog.Fatalf("seek failure: lastpos=%d, endpos=%d, err=%v", lasti*imgsize, newpos, err)
 			}
 		}
 
 		if _, err := fl.Read(yuyv.Pix); err != nil {
 			if err != io.EOF {
-				log.Fatalf("error reading: %v", err)
+				glog.Fatalf("error reading: %v", err)
 			} else {
 				lasti = i
 			}
