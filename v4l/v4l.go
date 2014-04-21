@@ -133,16 +133,19 @@ type Device struct {
 	capturing bool
 }
 
+type FormatId uint32
+
 type Format struct {
+	FormatId
 	Height int
 	Width int
-	Format uint32
 }
 
 // bufId is the actual bufnum+1 - thus the zero value is an invalid bufnum
 type bufId int
 
 type Frame struct {
+	Format
 	bufnum bufId
 	Pix []byte
 	ReqTime time.Time
@@ -156,7 +159,7 @@ func (f Frame) GetBufNum() int {
 // CopyPix is used to create a new frame with the same pix but no buffer reference,
 // allowing the existing one to be released with DoneFrame.
 func (f Frame) CopyPix() Frame {
-	newFrame := Frame{ReqTime: f.ReqTime, RecvTime: f.RecvTime}
+	newFrame := f
 	newFrame.Pix = make([]byte, len(f.Pix))
 	copy(newFrame.Pix, f.Pix)
 	return newFrame
@@ -256,26 +259,42 @@ func (v *Device) SetFormat(vf Format) error {
 		}
 	}
 
+	return v.getFps()
+}
+
+func (v *Device) GetFps() (int, int) {
+	return v.fpsnom, v.fpsdenom
+}
+
+func (v *Device) getFps() error {
+	var nom, denom C.uint
 	var sparm C.struct_v4l2_streamparm
 	sparm._type = C.V4L2_BUF_TYPE_VIDEO_CAPTURE
 	if errno := ioctl(v.file, C.VIDIOC_G_PARM, unsafe.Pointer(&sparm)); errno != 0 {
-		return v.err("g_parm failed for format %v: errno=%d", vf, errno)
+		return v.err("g_parm failed, errno=%d", errno)
 	}
-	var nom, denom C.uint
 	C.get_v4l2_parmcap_fps(&sparm, &nom, &denom)
 	v.fpsnom = int(nom)
 	v.fpsdenom = int(denom)
-	// log.Printf("g_parm fps=%d/%d", uint(nom), uint(denom))
+	return nil
+}
+
+func (v *Device) SetFps(fps int) error {
+	var sparm C.struct_v4l2_streamparm
+	sparm._type = C.V4L2_BUF_TYPE_VIDEO_CAPTURE
+	nom, denom := C.uint(1), C.uint(fps)
+	C.set_v4l2_parmcap_fps(&sparm, nom, denom)
 
 	if errno := ioctl(v.file, C.VIDIOC_S_PARM, unsafe.Pointer(&sparm)); errno != 0 {
-		return v.err("s_parm failed for format %v: errno=%d", vf, errno)
+		return v.err("s_parm failed for fps=%d: errno=%d", fps, errno)
 	}
-	return nil
+
+	return v.getFps()
 }
 
 func (v *Device) setFormatNoV4lConvert(vf Format) error {
 	var vfmt C.struct_v4l2_format
-	C.init_v4l2_format(&vfmt, C.int(vf.Width), C.int(vf.Height), C.int(vf.Format))
+	C.init_v4l2_format(&vfmt, C.int(vf.Width), C.int(vf.Height), C.int(vf.FormatId))
 
 	if errno := ioctl(v.file, C.VIDIOC_TRY_FMT, unsafe.Pointer(&vfmt)); errno != 0 {
 		return v.err("try_fmt failed for format %v: errno=%d", vf, errno)
@@ -294,7 +313,7 @@ func (v *Device) setFormatNoV4lConvert(vf Format) error {
 
 func (v *Device) setFormatUseV4lConvert(vf Format) error {
 	var vfmt C.struct_v4l2_format
-	C.init_v4l2_format(&vfmt, C.int(vf.Width), C.int(vf.Height), C.int(vf.Format))
+	C.init_v4l2_format(&vfmt, C.int(vf.Width), C.int(vf.Height), C.int(vf.FormatId))
 
 	v4lconvert_data := C.v4lconvert_create(C.int(v.file.Fd()))
 	if v4lconvert_data == nil {
@@ -312,8 +331,8 @@ func (v *Device) setFormatUseV4lConvert(vf Format) error {
 }
 
 // GetSupportedFormats queries the driver for the opened video device to return a list of formats.
-func (v *Device) GetSupportedFormats() ([]uint32, error) {
-	var fmts []uint32
+func (v *Device) GetSupportedFormats() ([]FormatId, error) {
+	var fmts []FormatId
 	var fmtdesc C.struct_v4l2_fmtdesc
 	for i := 0; ; i++ {
 		C.init_v4l2_fmtdesc(&fmtdesc, C.int(i))
@@ -325,7 +344,7 @@ func (v *Device) GetSupportedFormats() ([]uint32, error) {
 		}
 		var f C.uint
 		C.get_v4l2_fmtdesc(&fmtdesc, &f)
-		fmts = append(fmts, uint32(f))
+		fmts = append(fmts, FormatId(f))
 	}
 	return fmts, nil
 }
@@ -469,21 +488,21 @@ func (v *Device) DoneFrame(frame Frame) error {
 // GetImage builds an Image from the provided Frame.
 // Supported formats: YUYV returns a *imglib.YUYV, RGB24 returns a *imglib.RGB, and JPEG returns a image.Jpeg.
 func (v *Device) GetImage(frame Frame) (image.Image, error) {
-	switch v.format.Format {
-	case C.V4L2_PIX_FMT_YUYV:
+	switch v.format.FormatId {
+	case FormatYuyv:
 		img := imglib.NewYUYV(image.Rect(0, 0, v.format.Width, v.format.Height))
 		copy(img.Pix, frame.Pix)
 		return img, nil
-	case C.V4L2_PIX_FMT_RGB24:
+	case FormatRgb:
 		img := imglib.NewRGB(image.Rect(0, 0, v.format.Width, v.format.Height))
 		copy(img.Pix, frame.Pix)
 		return img, nil
-	case C.V4L2_PIX_FMT_JPEG:
+	case FormatJpeg:
 		if img, _, err := image.Decode(bytes.NewReader(frame.Pix)); err != nil {
 			return nil, err
 		} else {
 			return img, nil
 		}
 	}
-	return nil, v.err("can't get image from frame of format %d", v.format.Format)
+	return nil, v.err("can't get image from frame of format %d", v.format.FormatId)
 }

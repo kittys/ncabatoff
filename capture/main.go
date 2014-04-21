@@ -3,6 +3,7 @@ package main
 import (
 	// "bytes"
 	"code.google.com/p/ncabatoff/v4l"
+	"code.google.com/p/ncabatoff/imglib"
 	"flag"
 	"fmt"
 	"os"
@@ -27,6 +28,7 @@ var flagHeight = flag.Int("height", 480, "height in pixels")
 var flagFormat = flag.String("format", "yuv", "format yuv or rgb or jpg")
 var flagFrames = flag.Int("frames", 0, "frames to capture")
 var flagDiscard = flag.Bool("discard", false, "discard frames")
+var flagFps = flag.Int("fps", 0, "frames per second")
 
 func main() {
 	// defer profile.Start(profile.MemProfile).Stop()
@@ -77,7 +79,9 @@ func initCaptureDevice(path string) *v4l.Device {
 	if err != nil {
 		glog.Fatalf("%v", err)
 	}
-	pxlfmt := uint32(0)
+	lp("supported formats: %v", fmts)
+
+	var pxlfmt v4l.FormatId
 	switch(*flagFormat) {
 	case "yuv": pxlfmt = v4l.FormatYuyv
 	case "rgb": pxlfmt = v4l.FormatRgb
@@ -95,9 +99,19 @@ func initCaptureDevice(path string) *v4l.Device {
 		glog.Fatalf("requested format %s not supported by device", *flagFormat)
 	}
 
-	dev.SetFormat(v4l.Format{Height: *flagHeight, Width: *flagWidth, Format: pxlfmt})
+	vf := v4l.Format{Height: *flagHeight, Width: *flagWidth, FormatId: pxlfmt}
+	if err := dev.SetFormat(vf); err != nil {
+		glog.Fatalf("setformat=%v", err)
+	}
 
-	lp("supported formats: %v", fmts)
+	if *flagFps != 0 {
+		if err := dev.SetFps(*flagFps); err != nil {
+			glog.Fatalf("setfps=%v", err)
+		}
+	}
+	nom, denom := dev.GetFps()
+	glog.Infof("fps=%d/%d", nom, denom)
+
 	if err = dev.InitBuffers(*flagNumBufs); err != nil {
 		glog.Fatalf("init=%v", err)
 	}
@@ -147,6 +161,16 @@ func fetchImages(dev *v4l.Device, imageChan chan simage) {
 		start := time.Now()
 		frame, err := dev.GetFrame()
 		newFrame := frame.CopyPix()
+		if frame.FormatId == v4l.FormatYuyv {
+			// For some unfathomable reason, my PS3 Eye suddenly 
+			// decided to start returning 320x240 YUYV images a hair
+			// bigger than they ought to be.  I'm at a loss to say why,
+			// and other webcams don't have this issue.  Anyway,
+			// easy workaround:
+			pixelCount := frame.Height * frame.Width
+			maxLen := imglib.YuyvBytes{}.GetBytesPerPixel() * pixelCount
+			newFrame.Pix = newFrame.Pix[:maxLen]
+		}
 		bufrel <- frame
 		logsince(start, "%d got %s frame bytes=%d", i, *flagFormat, len(newFrame.Pix))
 
