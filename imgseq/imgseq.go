@@ -78,9 +78,7 @@ func LoadImage(path string) (image.Image, error) {
 		if yuyv, err := imglib.NewYUYVFromFile(path); err != nil {
 			return nil, err
 		} else {
-			// It's faster to convert to RGBA and then to BGR (xgbutil.Image)
-			// than it is to use the generic xgbutil conversion code:
-			return imglib.StdImage{yuyv}.GetRGBA(), nil
+			return yuyv, nil
 		}
 	}
 
