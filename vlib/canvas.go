@@ -10,8 +10,6 @@ import (
 	"github.com/golang/glog"
 )
 
-var imgs = []*xgraphics.Image{}
-
 // chans is a group of channels used to communicate with the canvas goroutine.
 type chans struct {
 	// drawChan is sent a function that transforms the current origin point
@@ -28,12 +26,6 @@ type chans struct {
 	// nextImg can be pinged to cycle to the next image. It wraps.
 	nextImg chan struct{}
 
-	// prevVal can be pinged to cycle to the previous value.
-	prevVal chan struct{}
-
-	// nextVal can be pinged to cycle to the next value.
-	nextVal chan struct{}
-
 	// The pan{Start,Step,End}Chan types facilitate panning. They correspond
 	// to "drag start", "drag step", and "drag end."
 	panStartChan chan image.Point
@@ -43,134 +35,111 @@ type chans struct {
 
 type ImageFetcher func(i int) (int, []image.Image)
 
+type canv struct {
+	chans
+	imgs []*xgraphics.Image
+	wins []*window
+	panStart image.Point
+	panOrigin image.Point
+	current int
+	origin image.Point
+	name string
+	imageFetcher ImageFetcher
+	X *xgbutil.XUtil
+}
+
+func (c *canv) clearimgs() {
+	for i := range c.imgs {
+		if c.imgs[i] != nil {
+			c.imgs[i].Destroy()
+			c.imgs[i] = nil
+		}
+	}
+}
+
+func (c *canv) setImage(i int, pt image.Point) {
+	if c.current != i || len(c.imgs) == 0 {
+		c.name = fmt.Sprintf("%d", i)
+		newi, newimgs := c.imageFetcher(i)
+		c.current = newi
+
+		//	window.ClearAll()
+		c.clearimgs()
+		c.imgs = c.imgs[:0]
+
+		for _, img := range newimgs {
+			c.imgs = append(c.imgs, draw(xgraphics.NewConvert(c.X, img)))
+		}
+	}
+	if len(c.wins) == 0 {
+		for i := 0; i < len(c.imgs); i++ {
+			win := newWindow(c.X, c.imgs[i].Bounds().Dx(), c.imgs[i].Bounds().Dy())
+			win.setupEventHandlers(c.chans)
+			c.wins = append(c.wins, win)
+		}
+	}
+
+	if pt != image.ZP && pt != c.origin {
+		c.origin = originTrans(pt, c.wins[0], c.imgs[0])
+	}
+	c.show()
+}
+
+func (c *canv) run() {
+	c.setImage(c.current, c.origin)
+	for {
+		sstart := time.Now()
+		select {
+		case funpt := <-c.drawChan:
+			logsince(sstart, "received draw request %v", funpt)
+			c.setImage(c.current, funpt(c.origin))
+		case <-c.resizeToImageChan:
+			logsince(sstart, "received resize request request")
+			rect := c.imgs[0].Bounds()
+			for _, win := range c.wins {
+				win.Resize(rect.Dx(), rect.Dy())
+			}
+		case <-c.prevImg:
+			logsince(sstart, "received prevImg request")
+			c.setImage(c.current-1, c.origin)
+		case <-c.nextImg:
+			logsince(sstart, "received nextImg request")
+			c.setImage(c.current+1, c.origin)
+		case pt := <-c.panStartChan:
+			c.panStart = pt
+			c.panOrigin = c.origin
+		case pt := <-c.panStepChan:
+			xd, yd := c.panStart.X-pt.X, c.panStart.Y-pt.Y
+			c.setImage(c.current,
+				image.Point{xd + c.panOrigin.X, yd + c.panOrigin.Y})
+		case <-c.panEndChan:
+			c.panStart, c.panOrigin = image.Point{}, image.Point{}
+		}
+	}
+}
+
 // canvas is meant to be run as a single goroutine that maintains the state
 // of the image viewer. It manipulates state by reading values from the channels
 // defined in the 'chans' type.
 func Canvas(X *xgbutil.XUtil, getImages ImageFetcher) chans {
-	var wins []*window
-	drawChan := make(chan func(pt image.Point) image.Point, 0)
-	resizeToImageChan := make(chan struct{}, 0)
-	prevImg := make(chan struct{}, 0)
-	nextImg := make(chan struct{}, 0)
-	prevVal := make(chan struct{}, 0)
-	nextVal := make(chan struct{}, 0)
-
-	panStartChan := make(chan image.Point, 0)
-	panStepChan := make(chan image.Point, 0)
-	panEndChan := make(chan image.Point, 0)
-	panStart, panOrigin := image.Point{}, image.Point{}
-
 	chans := chans{
-		drawChan:          drawChan,
-		resizeToImageChan: resizeToImageChan,
-		prevImg:           prevImg,
-		nextImg:           nextImg,
-		prevVal:           prevVal,
-		nextVal:           nextVal,
-
-		panStartChan: panStartChan,
-		panStepChan:  panStepChan,
-		panEndChan:   panEndChan,
+		drawChan:          make(chan func(pt image.Point) image.Point, 0),
+		resizeToImageChan: make(chan struct{}, 0),
+		prevImg:           make(chan struct{}, 0),
+		nextImg:           make(chan struct{}, 0),
+		panStartChan:      make(chan image.Point, 0),
+		panStepChan:       make(chan image.Point, 0),
+		panEndChan:        make(chan image.Point, 0),
+	}
+	canv := canv {
+		chans: chans,
+		imageFetcher: getImages,
+		X: X,
 	}
 
-	clearimgs := func() {
-		for i := range imgs {
-			if imgs[i] != nil {
-				imgs[i].Destroy()
-				imgs[i] = nil
-			}
-		}
-	}
-	defer func() { clearimgs() }()
+	// defer func() { clearimgs() }()
 
-	current := 0 // flagStartFrame
-	arg1 := 111
-	origin := image.Point{0, 0}
-	name := ""
-
-	setImage := func(i int, pt image.Point) {
-		lg("setImage %d", i)
-		start := time.Now()
-		if current != i || len(imgs) == 0 {
-			newi, newimgs := getImages(i)
-			current = newi
-
-			//	window.ClearAll()
-			clearimgs()
-			imgs = imgs[:0]
-
-			// info := curimg.Src.Info
-			// name = fmt.Sprintf("%d %s t=%d", info.Imgid, info.Creation.Format("05.999"), arg1)
-
-			for _, img := range newimgs {
-				imgs = append(imgs, draw(xgraphics.NewConvert(X, img)))
-			}
-			// }
-		}
-		if len(wins) == 0 {
-			for i := 0; i < len(imgs); i++ {
-				win := newWindow(X, imgs[i].Bounds().Dx(), imgs[i].Bounds().Dy())
-				win.setupEventHandlers(chans)
-				wins = append(wins, win)
-			}
-		}
-
-		//if imgs[i] == nil {
-		//  window.nameSet(fmt.Sprintf("%s - Loading...", names[i]))
-		//	return
-		//}
-
-		if pt != image.ZP && pt != origin {
-			origin = originTrans(pt, wins[0], imgs[0])
-		}
-		show(wins, name, imgs, origin)
-		logsince(start, "end setImage %d", i)
-	}
-
-	go func() {
-		setImage(current, origin)
-		for {
-			sstart := time.Now()
-			select {
-			case funpt := <-drawChan:
-				logsince(sstart, "received draw request %v", funpt)
-				setImage(current, funpt(origin))
-			case <-resizeToImageChan:
-				logsince(sstart, "received resize request request")
-				rect := imgs[0].Bounds()
-				for _, win := range wins {
-					win.Resize(rect.Dx(), rect.Dy())
-				}
-			case <-prevImg:
-				logsince(sstart, "received prevImg request")
-				setImage(current-1, origin)
-			case <-nextImg:
-				logsince(sstart, "received nextImg request")
-				setImage(current+1, origin)
-			case <-prevVal:
-				logsince(sstart, "received prevVal request")
-				arg1--
-				c := current
-				current = -1
-				setImage(c, origin)
-			case <-nextVal:
-				logsince(sstart, "received nextVal request")
-				arg1++
-				c := current
-				current = -1
-				setImage(c, origin)
-			case pt := <-panStartChan:
-				panStart = pt
-				panOrigin = origin
-			case pt := <-panStepChan:
-				xd, yd := panStart.X-pt.X, panStart.Y-pt.Y
-				setImage(current,
-					image.Point{xd + panOrigin.X, yd + panOrigin.Y})
-			case <-panEndChan:
-				panStart, panOrigin = image.Point{}, image.Point{}
-			}
-		}
-	}()
+	go canv.run()
 
 	return chans
 }
@@ -213,21 +182,21 @@ func originTrans(pt image.Point, win *window, img *xgraphics.Image) image.Point 
 // show translates the given origin point, paints the appropriate part of the
 // current image to the canvas, and sets the name of the window.
 // (Painting only paints the sub-image that is viewable.)
-func show(wins []*window, name string, ximgs []*xgraphics.Image, pt image.Point) {
-	for i, win := range wins {
+func (c *canv) show() {
+	for i, win := range c.wins {
 		// If there's no valid image, don't bother trying to show it.
 		// (We're hopefully loading the image now.)
-		if ximgs[i] != nil {
+		if c.imgs[i] != nil {
 			// Now paint the sub-image to the window.
-			win.paint(ximgs[i].SubImage(image.Rect(pt.X, pt.Y,
-				pt.X+win.Geom.Width(), pt.Y+win.Geom.Height())))
+			win.paint(c.imgs[i].SubImage(image.Rect(c.origin.X, c.origin.Y,
+				c.origin.X+win.Geom.Width(), c.origin.Y+win.Geom.Height())))
 
 			// Always set the name of the window when we update it with a new image.
-			win.nameSet(fmt.Sprintf("%d %s (%dx%d)", i, name, ximgs[i].Bounds().Dx(), ximgs[i].Bounds().Dy()))
+			win.nameSet(fmt.Sprintf("%d %s (%dx%d)", i, c.name, c.imgs[i].Bounds().Dx(), c.imgs[i].Bounds().Dy()))
 		} else {
 			// TODO draw black
-			// win.paint(ximgs[i].SubImage(image.Rect(pt.X, pt.Y,
-			// pt.X+win.Geom.Width(), pt.Y+win.Geom.Height())))
+			// win.paint(c.imgs[i].SubImage(image.Rect(c.origin.X, c.origin.Y,
+			// c.origin.X+win.Geom.Width(), c.origin.Y+win.Geom.Height())))
 		}
 	}
 }

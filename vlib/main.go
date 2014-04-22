@@ -28,14 +28,6 @@ var (
 			func(w *window) { w.chans.nextImg <- struct{}{} },
 		},
 		{
-			"up", "Cycle to the previous value.",
-			func(w *window) { w.chans.prevVal <- struct{}{} },
-		},
-		{
-			"down", "Cycle to the next value.",
-			func(w *window) { w.chans.nextVal <- struct{}{} },
-		},
-		{
 			"r", "Resize the window to fit the current image.",
 			func(w *window) { w.chans.resizeToImageChan <- struct{}{} },
 		},
