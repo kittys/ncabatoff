@@ -4,6 +4,7 @@ import (
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/golang/glog"
+	"image"
 )
 
 var (
@@ -58,7 +59,22 @@ func ViewImages(fetcher ImageFetcher) {
 
 	// Create the X window before starting anything so that the user knows
 	// something is going on.
-	Canvas(X, fetcher)
+	Canvas(X, fetcher, nil)
+
+	// Start the main X event loop.
+	xevent.Main(X)
+}
+
+func StreamImages(imageInChan chan []image.Image) {
+	// Connect to X and quit if we fail.
+	X, err := xgbutil.NewConn()
+	if err != nil {
+		glog.Fatal(err)
+	}
+
+	// Create the X window before starting anything so that the user knows
+	// something is going on.
+	Canvas(X, nil, imageInChan)
 
 	// Start the main X event loop.
 	xevent.Main(X)

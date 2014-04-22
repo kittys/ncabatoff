@@ -31,6 +31,8 @@ type chans struct {
 	panStartChan chan image.Point
 	panStepChan  chan image.Point
 	panEndChan   chan image.Point
+
+	imageInChan  chan []image.Image
 }
 
 type ImageFetcher func(i int) (int, []image.Image)
@@ -48,6 +50,7 @@ type canv struct {
 	X *xgbutil.XUtil
 }
 
+// Release the memory allocated in draw()
 func (c *canv) clearimgs() {
 	for i := range c.imgs {
 		if c.imgs[i] != nil {
@@ -57,20 +60,34 @@ func (c *canv) clearimgs() {
 	}
 }
 
+// setup a new set of images; this does everything except paint them to the screen
+func (c *canv) newImages(imgs []image.Image) {
+	c.clearimgs()
+	c.imgs = c.imgs[:0]
+
+	for _, img := range imgs {
+		c.imgs = append(c.imgs, draw(xgraphics.NewConvert(c.X, img)))
+	}
+}
+
 func (c *canv) setImage(i int, pt image.Point) {
+	if c.imageFetcher == nil {
+		return
+	}
 	if c.current != i || len(c.imgs) == 0 {
 		c.name = fmt.Sprintf("%d", i)
 		newi, newimgs := c.imageFetcher(i)
-		c.current = newi
-
-		//	window.ClearAll()
-		c.clearimgs()
-		c.imgs = c.imgs[:0]
-
-		for _, img := range newimgs {
-			c.imgs = append(c.imgs, draw(xgraphics.NewConvert(c.X, img)))
+		if len(newimgs) == 0 {
+			return
 		}
+		c.current = newi
+		c.newImages(newimgs)
 	}
+	c.display(pt)
+}
+
+// create and setup windows if need be, then draw to them
+func (c *canv) display(pt image.Point) {
 	if len(c.wins) == 0 {
 		for i := 0; i < len(c.imgs); i++ {
 			win := newWindow(c.X, c.imgs[i].Bounds().Dx(), c.imgs[i].Bounds().Dy())
@@ -86,6 +103,7 @@ func (c *canv) setImage(i int, pt image.Point) {
 }
 
 func (c *canv) run() {
+	defer c.clearimgs()
 	c.setImage(c.current, c.origin)
 	for {
 		sstart := time.Now()
@@ -114,6 +132,9 @@ func (c *canv) run() {
 				image.Point{xd + c.panOrigin.X, yd + c.panOrigin.Y})
 		case <-c.panEndChan:
 			c.panStart, c.panOrigin = image.Point{}, image.Point{}
+		case imgs := <-c.imageInChan:
+			c.newImages(imgs)
+			c.display(c.origin)
 		}
 	}
 }
@@ -121,7 +142,7 @@ func (c *canv) run() {
 // canvas is meant to be run as a single goroutine that maintains the state
 // of the image viewer. It manipulates state by reading values from the channels
 // defined in the 'chans' type.
-func Canvas(X *xgbutil.XUtil, getImages ImageFetcher) chans {
+func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []image.Image) chans {
 	chans := chans{
 		drawChan:          make(chan func(pt image.Point) image.Point, 0),
 		resizeToImageChan: make(chan struct{}, 0),
@@ -130,14 +151,13 @@ func Canvas(X *xgbutil.XUtil, getImages ImageFetcher) chans {
 		panStartChan:      make(chan image.Point, 0),
 		panStepChan:       make(chan image.Point, 0),
 		panEndChan:        make(chan image.Point, 0),
+		imageInChan:       imageInChan,
 	}
 	canv := canv {
 		chans: chans,
 		imageFetcher: getImages,
 		X: X,
 	}
-
-	// defer func() { clearimgs() }()
 
 	go canv.run()
 
