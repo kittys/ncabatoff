@@ -40,7 +40,10 @@ var (
 	// When set, bv will print all keybindings and exit.
 	flagKeybindings bool
 
-	flagDeltaThresh int
+	flagDeltaThresh   int
+	flagMinArea       int
+	flagMaxArea       int
+	flagMinSquareness int
 )
 
 func init() {
@@ -66,6 +69,9 @@ func init() {
 
 	flag.IntVar(&flagDeltaThresh, "deltaThresh", 32*69,
 		"The delta filter threshold.")
+	flag.IntVar(&flagMinArea, "minarea", 20, "minimum rect area")
+	flag.IntVar(&flagMaxArea, "maxarea", 200, "maximum rect area")
+	flag.IntVar(&flagMinSquareness, "minsquareness", 2, "max h:w or w:h ratio")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -128,12 +134,48 @@ func main() {
 	}
 }
 
+func filtRects(rects []image.Rectangle) []image.Rectangle {
+	out := make([]image.Rectangle, 0, len(rects))
+	maxsq := 10 * flagMinSquareness
+	for _, r := range rects {
+		sz := r.Size()
+		ar := sz.X * sz.Y
+		if ar >= flagMinArea && ar <= flagMaxArea {
+			xdivr := 10 * sz.X / sz.Y
+			ydivr := 10 * sz.Y / sz.X
+			if xdivr <= maxsq && ydivr <= maxsq {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+func viewDir2(path string) {
+	dl := imgseq.GetDirList(path)
+	filtdl := dl
+	filtdl.Files = make([]string, 0, len(dl.Files))
+	for _, fn := range dl.Files {
+		if filepath.Ext(fn) == ".yuv" {
+			filtdl.Files = append(filtdl.Files, fn)
+		}
+	}
+
+	imgin := make(chan imgseq.Img, 100)
+	go imgseq.LoadImages(filtdl, imgin)
+	imgout := make(chan []image.Image)
+
+	go vlib.StreamImages(imgout)
+	filterInactive(imgin, imgout)
+	close(imgout)
+}
+
 func viewDir(path string) {
 	dl := imgseq.GetDirList(path)
-	imgs := make([][]imgseq.Img, 0, 100)
+	imgs := make([][]image.Image, 0, 100)
 	imagechan := make(chan imgseq.Img, 100)
 	go imgseq.LoadImages(dl, imagechan)
-	filtchan := make(chan []imgseq.Img, 100)
+	filtchan := make(chan []image.Image, 100)
 	go filterInactive(imagechan, filtchan)
 
 	for img := range filtchan {
@@ -149,7 +191,7 @@ func viewDir(path string) {
 		if i < 0 {
 			i = len(imgs) - 1
 		}
-		return i, []image.Image{imgs[i][0].Image, imgs[i][1].Image}
+		return i, imgs[i]
 	})
 }
 
@@ -235,30 +277,26 @@ func viewDevice(path string) {
 	})
 }
 
-func filterInactive(imgin chan imgseq.Img, imgout chan []imgseq.Img) {
+func filterInactive(imgin chan imgseq.Img, imgout chan []image.Image) {
 	trk := motion.NewTracker()
 	for img := range imgin {
 		glog.V(1).Infof("filtering img %v with %d bytes", img.ImgInfo)
 		if rs := trk.GetRects(img, flagDeltaThresh); len(rs) > 0 {
+			rs = filtRects(rs)
 			sort.Sort(motion.RectAreaSlice(rs))
-			newimg := img
-			newimg.Image = getRectImage(img, rs)
-			imgout <- []imgseq.Img{img, newimg}
+			rgba := imglib.StdImage{img.Image}.GetRGBA()
+			imgout <- []image.Image{rgba, getRectImage(img, rs)}
 		}
 	}
 	close(imgout)
 }
 
 func getRectImage(img imgseq.Img, rects []image.Rectangle) image.Image {
-    irect := img.Bounds()
-    out := image.NewRGBA(irect)
-    for _, r := range rects {
-        // sz := r.Size()
-        // ar := sz.X * sz.Y
-        // if ar > 15 && ar < 250 {
-            draw.Draw(out, r.Inset(-1), &image.Uniform{color.White}, image.ZP, draw.Src)
-            draw.Draw(out, r, img.Image, r.Min, draw.Src)
-        // }
-    }
-    return out
+	irect := img.Bounds()
+	out := image.NewRGBA(irect)
+	for _, r := range rects {
+		draw.Draw(out, r.Inset(-1), &image.Uniform{color.White}, image.ZP, draw.Src)
+		draw.Draw(out, r, img.Image, r.Min, draw.Src)
+	}
+	return out
 }
