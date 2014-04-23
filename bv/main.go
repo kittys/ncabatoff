@@ -143,7 +143,7 @@ func viewDir(path string) {
 		if i < 0 {
 			i = len(imgs) - 1
 		}
-		return i, []image.Image{imgs[i].Image}
+		return i, []image.Image{imglib.StdImage{imgs[i].Image}.GetRGBA()}
 	})
 }
 

@@ -275,6 +275,8 @@ func NewYUYVFromFile(path string) (*YUYV, error) {
 	} else {
 		r := image.Rectangle{}
 		switch fi.Size() / 2 {
+		case 1280 * 720:
+			r.Max = image.Point{1280, 720}
 		case 640 * 480:
 			r.Max = image.Point{640, 480}
 		case 320 * 240:
