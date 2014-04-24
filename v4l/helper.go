@@ -128,7 +128,7 @@ func (cs *CaptureStream) fetchImages() {
 		select {
 		case <-cs.done:
 			cs.shutdown()
-			break
+			return
 		default:
 		}
 		start := time.Now()
