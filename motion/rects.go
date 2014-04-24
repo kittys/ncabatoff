@@ -100,6 +100,7 @@ func (rj *rectjoiner) addrow(rs []image.Rectangle) {
 }
 
 func (rj *rectjoiner) removeAboveY(y int) {
+	rj.rectbuf = rj.rectbuf[:0]
 	for _, r := range rj.rects {
 		if r != image.ZR {
 			if r.Max.Y < y {
@@ -111,7 +112,7 @@ func (rj *rectjoiner) removeAboveY(y int) {
 	}
 	// rectbuf is a temporary variable, but we preserve it in rj
 	// to avoid allocation
-	rj.rectbuf, rj.rects = rj.rects[:0], rj.rectbuf
+	rj.rectbuf, rj.rects = rj.rects, rj.rectbuf
 }
 
 
