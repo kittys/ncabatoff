@@ -11,16 +11,14 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"sort"
-	"syscall"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 )
 
 var (
@@ -121,17 +119,7 @@ func main() {
 		usage()
 	}
 
-	fi, err := os.Stat(flag.Arg(0))
-	if err != nil {
-		glog.Fatalf("unable to stat input '%s': %v", flag.Arg(0), err)
-	}
-	if fi.IsDir() {
-		viewDir(flag.Arg(0))
-	} else if fi.Mode().IsRegular() {
-		viewFileMmap(flag.Arg(0))
-	} else {
-		viewDevice(flag.Arg(0))
-	}
+	viewDir(flag.Arg(0))
 }
 
 func filtRects(rects []image.Rectangle) []image.Rectangle {
@@ -151,7 +139,7 @@ func filtRects(rects []image.Rectangle) []image.Rectangle {
 	return out
 }
 
-func viewDir2(path string) {
+func viewDir(path string) {
 	dl := imgseq.GetDirList(path)
 	filtdl := dl
 	filtdl.Files = make([]string, 0, len(dl.Files))
@@ -162,141 +150,37 @@ func viewDir2(path string) {
 	}
 
 	imgin := make(chan imgseq.Img, 100)
-	go imgseq.LoadImages(filtdl, imgin)
-	imgout := make(chan []image.Image)
+	go imgseq.LoadRawImgs(filtdl, imgin)
+	imgout := make(chan []imgseq.Img)
 
 	go vlib.StreamImages(imgout)
 	filterInactive(imgin, imgout)
 	close(imgout)
 }
 
-func viewDir(path string) {
-	dl := imgseq.GetDirList(path)
-	imgs := make([][]image.Image, 0, 100)
-	imagechan := make(chan imgseq.Img, 100)
-	go imgseq.LoadImages(dl, imagechan)
-	filtchan := make(chan []image.Image, 100)
-	go filterInactive(imagechan, filtchan)
-
-	for img := range filtchan {
-		imgs = append(imgs, img)
-	}
-
-	glog.Infof("starting viewer for %d images", len(imgs))
-	vlib.ViewImages(func(i int) (int, []image.Image) {
-		lg("got %d", i)
-		if i >= len(imgs) {
-			i = 0
-		}
-		if i < 0 {
-			i = len(imgs) - 1
-		}
-		return i, imgs[i]
-	})
-}
-
-func viewFileMmap(path string) {
-	rect := image.Rect(0, 0, flagWidth, flagHeight)
-	imgsize := 2 * (rect.Size().X * rect.Size().Y)
-	var buffer []byte
-	var fileSize int64
-	if fl, err := os.Open(path); err != nil {
-		glog.Fatalf("unable to open %s: %v", path, err)
-	} else {
-		if fi, err := fl.Stat(); err != nil {
-			glog.Fatalf("unable to stat %s: %v", path, err)
-		} else {
-			fileSize = fi.Size()
-		}
-
-		if buffer, err = syscall.Mmap(int(fl.Fd()), 0, int(fileSize),
-			syscall.PROT_READ, syscall.MAP_SHARED); err != nil {
-			glog.Fatalf("unable to mmap %s: %v", path, err)
-		}
-	}
-	numimgs := int(fileSize) / imgsize
-
-	defer func(buf []byte) {
-		err := syscall.Munmap(buf)
-		lp("unmap err=%v", err)
-	}(buffer)
-
-	vlib.ViewImages(func(i int) (int, []image.Image) {
-		lg("got %d", i)
-		if i >= numimgs {
-			i = 0
-		}
-		if i < 0 {
-			i = numimgs - 1
-		}
-		pix := buffer[imgsize*i : imgsize*i+imgsize]
-		yuyv := imglib.YUYV{Pix: pix, Stride: rect.Dx() * 2, Rect: rect}
-		return i, []image.Image{imglib.StdImage{&yuyv}.GetRGBA()}
-	})
-}
-
-func getFileAndSize(path string) (*os.File, int64) {
-	if fl, err := os.Open(path); err != nil {
-		glog.Fatalf("unable to open %s: %v", path, err)
-	} else {
-		if fi, err := fl.Stat(); err != nil {
-			glog.Fatalf("unable to stat %s: %v", path, err)
-		} else {
-			return fl, fi.Size()
-		}
-	}
-	return nil, 0
-}
-
-func viewDevice(path string) {
-	rect := image.Rect(0, 0, flagWidth, flagHeight)
-	imgsize := 2 * (rect.Size().X * rect.Size().Y)
-	fl, _ := getFileAndSize(path)
-	// lp("devsize=%d", devSize)
-	// numimgs := int(devSize) / imgsize
-
-	lasti := -1
-	yuyv := imglib.NewYUYV(rect)
-	vlib.ViewImages(func(i int) (int, []image.Image) {
-		lg("got %d", i)
-		if i != lasti+1 {
-			if newpos, err := fl.Seek(int64(i*imgsize), os.SEEK_SET); err != nil {
-				glog.Fatalf("seek failure: lastpos=%d, endpos=%d, err=%v", lasti*imgsize, newpos, err)
-			}
-		}
-
-		if _, err := fl.Read(yuyv.Pix); err != nil {
-			if err != io.EOF {
-				glog.Fatalf("error reading: %v", err)
-			} else {
-				lasti = i
-			}
-		}
-
-		return i, []image.Image{imglib.StdImage{yuyv}.GetRGBA()}
-	})
-}
-
-func filterInactive(imgin chan imgseq.Img, imgout chan []image.Image) {
+func filterInactive(imgin chan imgseq.Img, imgout chan []imgseq.Img) {
 	trk := motion.NewTracker()
-	for img := range imgin {
-		glog.V(1).Infof("filtering img %v with %d bytes", img.ImgInfo)
-		if rs := trk.GetRects(img, flagDeltaThresh); len(rs) > 0 {
+	for simg := range imgin {
+		oimg := simg.GetImage()
+		iinfo := simg.GetImgInfo()
+		glog.V(1).Infof("filtering %s img %v", oimg.Bounds(), iinfo)
+		if rs := trk.GetRects(simg, flagDeltaThresh); len(rs) > 0 {
 			rs = filtRects(rs)
 			sort.Sort(motion.RectAreaSlice(rs))
-			rgba := imglib.StdImage{img.Image}.GetRGBA()
-			imgout <- []image.Image{rgba, getRectImage(img, rs)}
+			ops := imglib.GetPixelSequence(imglib.StdImage{oimg}.GetRGBA())
+			rps := imglib.GetPixelSequence(getRectImage(simg, rs))
+			imgout <- []imgseq.Img{&imgseq.RawImg{iinfo, ops}, &imgseq.RawImg{iinfo, rps}}
 		}
 	}
-	close(imgout)
 }
 
-func getRectImage(img imgseq.Img, rects []image.Rectangle) image.Image {
+func getRectImage(simg imgseq.Img, rects []image.Rectangle) image.Image {
+	img := simg.GetImage()
 	irect := img.Bounds()
 	out := image.NewRGBA(irect)
 	for _, r := range rects {
 		draw.Draw(out, r.Inset(-1), &image.Uniform{color.White}, image.ZP, draw.Src)
-		draw.Draw(out, r, img.Image, r.Min, draw.Src)
+		draw.Draw(out, r, img, r.Min, draw.Src)
 	}
 	return out
 }

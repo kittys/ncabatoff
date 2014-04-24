@@ -9,16 +9,33 @@ import "sort"
 import "code.google.com/p/ncabatoff/imglib"
 import "github.com/golang/glog"
 
-// ImgInfo identifies images by providing them a unique id, a timestamp, and a path to the file.
+var defaultPrefix = "test"
+
+// ImgInfo identifies images by providing them a unique id, a timestamp, and an
+// optional path to the file if any.
 type ImgInfo struct {
 	SeqNum     int
 	CreationTs time.Time
 	Path       string
 }
 
-type Img struct {
+type Img interface {
+	GetImgInfo() ImgInfo
+	GetPixelSequence() imglib.PixelSequence
+	GetImage() image.Image
+}
+
+type RawImg struct {
 	ImgInfo
-	image.Image
+	imglib.PixelSequence
+}
+
+func (r *RawImg) GetPixelSequence() imglib.PixelSequence {
+	return r.PixelSequence
+}
+
+func (r *RawImg) GetImgInfo() ImgInfo {
+	return r.ImgInfo
 }
 
 type DirList struct {
@@ -55,54 +72,38 @@ func (dl DirList) ImgInfos() []ImgInfo {
 	for i := range dl.Files {
 		ret[i] = ImgInfo{Path: filepath.Join(dl.Path, dl.Files[i])}
 		ret[i].SeqNum = i
-		if t := TimeFromFname(dl.Files[i]); t != nil {
+		if t := TimeFromFname(defaultPrefix, dl.Files[i]); t != nil {
 			ret[i].CreationTs = *t
 		}
 	}
 	return ret
 }
 
-func TimeFromFname(fname string) *time.Time {
+func TimeToFname(pfx string, t time.Time) string {
+	return fmt.Sprintf("%s%d", pfx, t.UnixNano())
+}
+
+func TimeFromFname(pfx string, fname string) *time.Time {
 	epochNanos := int64(0)
-	if _, err := fmt.Sscanf(fname[4:], "%d", &epochNanos); err != nil {
-		// errLg.Printf("Could not get time from fname=%s: %v", fname, err)
+	if _, err := fmt.Sscanf(fname, pfx + "%d", &epochNanos); err != nil {
 		return nil
 	}
 	t := time.Unix(0, epochNanos)
 	return &t
 }
 
-// Read and possibly convert or decode the input file
-func LoadImage(path string) (image.Image, error) {
-	if filepath.Ext(path) == ".yuv" {
-		if yuyv, err := imglib.NewYUYVFromFile(path); err != nil {
-			return nil, err
-		} else {
-			return yuyv, nil
-		}
-	}
-
-	if file, err := os.Open(path); err != nil {
-		return nil, err
-	} else {
-		defer file.Close()
-		img, _, err := image.Decode(file)
-		return img, err
-	}
-}
-
-func LoadImg(ii ImgInfo) Img {
-	if im, err := LoadImage(ii.Path); err != nil {
+func LoadRawImg(ii ImgInfo) Img {
+	if ps, err := imglib.LoadPixelSequence(ii.Path); err != nil {
 		glog.Fatalf("error loading image '%s': %v", ii.Path, err)
-		return Img{}
+		return nil
 	} else {
-		return Img{ImgInfo: ii, Image: im}
+		return &RawImg{ImgInfo: ii, PixelSequence: ps}
 	}
 }
 
-func LoadImages(dl DirList, imagechan chan Img) {
+func LoadRawImgs(dl DirList, imagechan chan Img) {
 	for _, f := range dl.ImgInfos() {
-		imagechan <- LoadImg(f)
+		imagechan <- LoadRawImg(f)
 	}
 	close(imagechan)
 }

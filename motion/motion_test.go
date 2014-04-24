@@ -267,7 +267,7 @@ func (s *MySuite) TestTracker(c *C) {
 	rimg := imglib.NewRGB(image.Rect(0, 0, 4, 4))
 	rimg.SetRGBA(1, 1, color.RGBA{1, 2, 3, 0xFF})
 	rimg.SetRGBA(2, 2, color.RGBA{1, 2, 3, 0xFF})
-	img := imgseq.Img{Image: rimg}
+	img := &imgseq.RawImg{PixelSequence: imglib.GetPixelSequence(rimg)}
 
 	trk := NewTracker()
 	for i := 0; i < LAVGN; i++ {
@@ -285,6 +285,7 @@ func (s *MySuite) TestTracker(c *C) {
 	c.Check(trk.longSums, DeepEquals, explns)
 
 	c.Check(trk.GetRects(img, 12), DeepEquals, []image.Rectangle{})
-	emptyimg := imgseq.Img{Image: imglib.NewRGB(image.Rect(0, 0, 4, 4))}
+	rimg = imglib.NewRGB(image.Rect(0, 0, 4, 4))
+	emptyimg := &imgseq.RawImg{PixelSequence: imglib.GetPixelSequence(rimg)}
 	c.Check(trk.GetRects(emptyimg, 12), DeepEquals, rslc(image.Rect(1, 1, 3, 3)))
 }

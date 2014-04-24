@@ -2,6 +2,7 @@ package imglib
 
 import (
 	"image"
+	"fmt"
 )
 
 // ImageBytes is a wrapper interface for []byte that tells us something
@@ -9,33 +10,58 @@ import (
 type ImageBytes interface {
 	GetBytes() []byte
 	GetBytesPerPixel() int
+	AsImage(width int) image.Image
 }
 
 type RgbBytes []byte
 
-func (rb RgbBytes) GetBytes() []byte {
-	return []byte(rb)
+func getRect(ib ImageBytes, width int) image.Rectangle {
+	pixcount := len(ib.GetBytes()) / ib.GetBytesPerPixel()
+	height := pixcount/width
+	return image.Rect(0, 0, width, height)
 }
-func (rb RgbBytes) GetBytesPerPixel() int {
+
+func (rgb RgbBytes) GetBytes() []byte {
+	return []byte(rgb)
+}
+func (rgb RgbBytes) GetBytesPerPixel() int {
 	return 3
+}
+func (rgb RgbBytes) AsImage(width int) image.Image {
+	return &RGB{rgb.GetBytes(), width * rgb.GetBytesPerPixel(), getRect(rgb, width)}
+}
+func (rgb RgbBytes) String() string {
+	return fmt.Sprintf("RgbBytes[%d]", len(rgb))
 }
 
 type RgbaBytes []byte
 
-func (rb RgbaBytes) GetBytes() []byte {
-	return []byte(rb)
+func (rgba RgbaBytes) GetBytes() []byte {
+	return []byte(rgba)
 }
-func (rb RgbaBytes) GetBytesPerPixel() int {
+func (rgba RgbaBytes) GetBytesPerPixel() int {
 	return 4
+}
+func (rgba RgbaBytes) AsImage(width int) image.Image {
+	return &image.RGBA{rgba.GetBytes(), width * rgba.GetBytesPerPixel(), getRect(rgba, width)}
+}
+func (rgba RgbaBytes) String() string {
+	return fmt.Sprintf("RgbaBytes[%d]", len(rgba))
 }
 
 type YuyvBytes []byte
 
-func (yb YuyvBytes) GetBytes() []byte {
-	return []byte(yb)
+func (yuyv YuyvBytes) GetBytes() []byte {
+	return []byte(yuyv)
 }
-func (yb YuyvBytes) GetBytesPerPixel() int {
+func (yuyv YuyvBytes) GetBytesPerPixel() int {
 	return 2
+}
+func (yuyv YuyvBytes) AsImage(width int) image.Image {
+	return &YUYV{yuyv.GetBytes(), width * yuyv.GetBytesPerPixel(), getRect(yuyv, width)}
+}
+func (yuyv YuyvBytes) String() string {
+	return fmt.Sprintf("YuyvBytes[%d]", len(yuyv))
 }
 
 func GetImageBytes(img image.Image) ImageBytes {
@@ -78,4 +104,8 @@ type PixelRow struct {
 func (ps PixelRow) GetBytes() []byte {
 	start, end := ps.Offset, ps.Offset+ps.GetStride()
 	return ps.PixelSequence.ImageBytes.GetBytes()[start:end]
+}
+
+func (ps PixelSequence) GetImage() image.Image {
+	return ps.AsImage(ps.Dx)
 }

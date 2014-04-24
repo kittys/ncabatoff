@@ -6,17 +6,17 @@ import (
 	"code.google.com/p/ncabatoff/vlib"
 	"flag"
 	"fmt"
+	"github.com/golang/glog"
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-	"os"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"syscall"
-	"github.com/golang/glog"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 )
 
 var (
@@ -36,8 +36,6 @@ var (
 	// When set, bv will print all keybindings and exit.
 	flagKeybindings bool
 
-	flagStartFrame int
-
 	// A list of keybindings. Each value corresponds to a triple of the key
 	// sequence to bind to, the action to run when that key sequence is
 	// pressed and a quick description of what the keybinding does.
@@ -50,7 +48,7 @@ func init() {
 	// Set all of the flags.
 	flag.IntVar(&flagWidth, "width", 480,
 		"The initial width of the window.")
-	flag.IntVar(&flagHeight, "height", 600,
+	flag.IntVar(&flagHeight, "height", 640,
 		"The initial height of the window.")
 	flag.BoolVar(&flagAutoResize, "auto-resize", false,
 		"If set, window will resize to size of first image.")
@@ -61,8 +59,8 @@ func init() {
 	flag.BoolVar(&flagKeybindings, "keybindings", false,
 		"If set, bv will output a list all keybindings.")
 
-	flag.IntVar(&flagStartFrame, "start", 0,
-		"If set, bv will start at this frame")
+	// flag.IntVar(&flagStartFrame, "start", 0,
+	//		"If set, bv will start at this frame")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -128,7 +126,7 @@ func viewDir(path string) {
 	dl := imgseq.GetDirList(path)
 	imgs := make([]imgseq.Img, 0, 100)
 	imagechan := make(chan imgseq.Img)
-	go imgseq.LoadImages(dl, imagechan)
+	go imgseq.LoadRawImgs(dl, imagechan)
 
 	for img := range imagechan {
 		imgs = append(imgs, img)
@@ -143,7 +141,11 @@ func viewDir(path string) {
 		if i < 0 {
 			i = len(imgs) - 1
 		}
-		return i, []image.Image{imglib.StdImage{imgs[i].Image}.GetRGBA()}
+		img := imgs[i].GetImage()
+		if yuyv, ok := img.(*imglib.YUYV); ok {
+			img = imglib.StdImage{yuyv}.GetRGBA()
+		}
+		return i, []image.Image{img}
 	})
 }
 
@@ -163,7 +165,7 @@ func viewFileMmap(path string) {
 
 		if buffer, err = syscall.Mmap(int(fl.Fd()), 0, int(fileSize),
 				syscall.PROT_READ, syscall.MAP_SHARED); err != nil {
-			glog.Fatalf("unable to mmap %s: %v", path, err )
+			glog.Fatalf("unable to mmap %s: %v", path, err)
 		}
 	}
 	numimgs := int(fileSize) / imgsize

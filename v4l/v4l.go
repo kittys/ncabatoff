@@ -116,6 +116,7 @@ import "syscall"
 import "time"
 import "unsafe"
 import "code.google.com/p/ncabatoff/imglib"
+import "github.com/golang/glog"
 
 const (
 	FormatYuyv = C.V4L2_PIX_FMT_YUYV
@@ -146,20 +147,28 @@ type bufId int
 
 type Frame struct {
 	Format
-	bufnum bufId
 	Pix []byte
 	ReqTime time.Time
 	RecvTime time.Time
 }
 
-func (f Frame) GetBufNum() int {
+type AllocFrame struct {
+	bufnum bufId
+	Frame
+}
+
+type FreeFrame struct {
+	Frame
+}
+
+func (f AllocFrame) GetBufNum() int {
 	return int(f.bufnum) - 1
 }
 
-// CopyPix is used to create a new frame with the same pix but no buffer reference,
+// Copy is used to create a new frame with the same pix but no buffer reference,
 // allowing the existing one to be released with DoneFrame.
-func (f Frame) CopyPix() Frame {
-	newFrame := f
+func (f AllocFrame) Copy() FreeFrame {
+	newFrame := FreeFrame{f.Frame}
 	newFrame.Pix = make([]byte, len(f.Pix))
 	copy(newFrame.Pix, f.Pix)
 	return newFrame
@@ -445,64 +454,82 @@ func (v *Device) EndCapture() error {
 }
 
 // GetFrame returns the next frame from the capture stream.
-func (v *Device) GetFrame() (Frame, error) {
+func (v *Device) GetFrame() (AllocFrame, error) {
 	if !v.capturing {
-		return Frame{}, v.err("not capturing")
+		return AllocFrame{}, v.err("not capturing")
 	}
-	// log.Printf("waiting for fd=%d\n", file.Fd())
+	glog.V(2).Infof("waiting for fd=%d\n", v.file.Fd())
 	reqtime := time.Now()
 	r, errno := C.wait_for_fd(C.int(v.file.Fd()))
 	if r == 0 {
-		return Frame{}, v.err("timeout on select while getting frame")
+		return AllocFrame{}, v.err("timeout on select while getting frame")
 	} else if r < 0 {
-		return Frame{}, v.err("error on select while getting frame: errno=%d", errno)
+		return AllocFrame{}, v.err("error on select while getting frame: errno=%d", errno)
 	}
 
 	var buf C.struct_v4l2_buffer
 	C.init_v4l2_buffer(&buf, 0)
 
 	if errno := ioctl(v.file, C.VIDIOC_DQBUF, unsafe.Pointer(&buf)); errno != 0 {
-		return Frame{}, v.err("failed to ioctl VIDIOC_DQBUF: errno=%d", errno)
+		return AllocFrame{}, v.err("failed to ioctl VIDIOC_DQBUF: errno=%d", errno)
 	}
-	f := Frame{RecvTime: time.Now(), ReqTime: reqtime}
-	f.Pix, f.bufnum = v.buffers[buf.index], bufId(int(buf.index)+1)
-	// log.Printf("success! bytesused=%d, length=%d\n", buf.bytesused, buf.length)
-	return f, nil
+	f := Frame{Format: v.format, RecvTime: time.Now(), ReqTime: reqtime, Pix: v.buffers[buf.index]}
+	af := AllocFrame{Frame: f, bufnum: bufId(int(buf.index)+1)}
+	glog.V(2).Infof("got frame of %d bytes in buf %v\n", len(af.Pix), af.bufnum)
+	return af, nil
 }
 
 // DoneFrame is used to return the buffer contained in Frame to the driver so it may be reused.
 // For best performance call DoneFrame as soon as possible after GetFrame.
-func (v *Device) DoneFrame(frame Frame) error {
+func (v *Device) DoneFrame(frame AllocFrame) error {
 	realBufnum := int(frame.bufnum - 1)
 	if realBufnum < 0 || realBufnum >= len(v.buffers) {
-		return v.err("invalid buffer number in frame")
+		return v.err("invalid bufnum %v in frame", frame.bufnum)
 	}
 	var buf C.struct_v4l2_buffer
 	C.init_v4l2_buffer(&buf, C.int(realBufnum))
 	if errno := ioctl(v.file, C.VIDIOC_QBUF, unsafe.Pointer(&buf)); errno != 0 {
 		return v.err("failed to ioctl VIDIOC_QBUF: errno=%d", errno)
+	} else {
+		glog.V(2).Infof("released buf %v\n", frame.bufnum)
 	}
 	return nil
 }
 
 // GetImage builds an Image from the provided Frame.
 // Supported formats: YUYV returns a *imglib.YUYV, RGB24 returns a *imglib.RGB, and JPEG returns a image.Jpeg.
-func (v *Device) GetImage(frame Frame) (image.Image, error) {
-	switch v.format.FormatId {
+func (f Frame) GetImage() (image.Image, error) {
+	switch f.Format.FormatId {
 	case FormatYuyv:
-		img := imglib.NewYUYV(image.Rect(0, 0, v.format.Width, v.format.Height))
-		copy(img.Pix, frame.Pix)
+		img := imglib.NewYUYV(image.Rect(0, 0, f.Format.Width, f.Format.Height))
+		copy(img.Pix, f.Pix)
 		return img, nil
 	case FormatRgb:
-		img := imglib.NewRGB(image.Rect(0, 0, v.format.Width, v.format.Height))
-		copy(img.Pix, frame.Pix)
+		img := imglib.NewRGB(image.Rect(0, 0, f.Format.Width, f.Format.Height))
+		copy(img.Pix, f.Pix)
 		return img, nil
 	case FormatJpeg:
-		if img, _, err := image.Decode(bytes.NewReader(frame.Pix)); err != nil {
+		if img, _, err := image.Decode(bytes.NewReader(f.Pix)); err != nil {
 			return nil, err
 		} else {
 			return img, nil
 		}
 	}
-	return nil, v.err("can't get image from frame of format %d", v.format.FormatId)
+	return nil, fmt.Errorf("can't get image from frame of format %d", f.Format.FormatId)
+}
+
+func (f Frame) GetPixelSequence() (*imglib.PixelSequence, error) {
+	ps := imglib.PixelSequence{Dx: f.Width, Dy: f.Height}
+	switch f.Format.FormatId {
+	case FormatYuyv:
+		img := imglib.NewYUYV(image.Rect(0, 0, f.Format.Width, f.Format.Height))
+		copy(img.Pix, f.Pix)
+		ps.ImageBytes = imglib.YuyvBytes(img.Pix)
+	case FormatRgb:
+		img := imglib.NewRGB(image.Rect(0, 0, f.Format.Width, f.Format.Height))
+		copy(img.Pix, f.Pix)
+		ps.ImageBytes = imglib.RgbBytes(img.Pix)
+	return nil, fmt.Errorf("can't get pixel seq from frame of format %d", f.Format.FormatId)
+	}
+	return &ps, nil
 }

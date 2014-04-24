@@ -1,6 +1,5 @@
 package imglib
 
-import "fmt"
 import "image"
 import "image/color"
 import "io"
@@ -263,30 +262,5 @@ func (img *YUYV) LoadRaw(path string) error {
 	} else {
 		defer file.Close()
 		return img.loadRaw(file)
-	}
-}
-
-func NewYUYVFromFile(path string) (*YUYV, error) {
-	var yuyv *YUYV
-	if file, err := os.Open(path); err != nil {
-		return nil, err
-	} else if fi, err := file.Stat(); err != nil {
-		return nil, err
-	} else {
-		r := image.Rectangle{}
-		switch fi.Size() / 2 {
-		case 1280 * 720:
-			r.Max = image.Point{1280, 720}
-		case 640 * 480:
-			r.Max = image.Point{640, 480}
-		case 320 * 240:
-			r.Max = image.Point{320, 240}
-		default:
-			return nil, fmt.Errorf("unknown dims, filesize=%d", fi.Size())
-		}
-
-		yuyv = NewYUYV(r)
-		yuyv.loadRaw(file)
-		return yuyv, nil
 	}
 }

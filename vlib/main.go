@@ -4,7 +4,7 @@ import (
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/golang/glog"
-	"image"
+	"code.google.com/p/ncabatoff/imgseq"
 )
 
 var (
@@ -65,7 +65,7 @@ func ViewImages(fetcher ImageFetcher) {
 	xevent.Main(X)
 }
 
-func StreamImages(imageInChan chan []image.Image) {
+func StreamImages(imageInChan chan []imgseq.Img) {
 	// Connect to X and quit if we fail.
 	X, err := xgbutil.NewConn()
 	if err != nil {

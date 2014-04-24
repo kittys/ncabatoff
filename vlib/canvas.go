@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"image"
 	"time"
+	"path/filepath"
 
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xgraphics"
 	"github.com/golang/glog"
+	"code.google.com/p/ncabatoff/imgseq"
 )
 
 // chans is a group of channels used to communicate with the canvas goroutine.
@@ -32,7 +34,7 @@ type chans struct {
 	panStepChan  chan image.Point
 	panEndChan   chan image.Point
 
-	imageInChan  chan []image.Image
+	imageInChan  chan []imgseq.Img
 }
 
 type ImageFetcher func(i int) (int, []image.Image)
@@ -133,7 +135,16 @@ func (c *canv) run() {
 		case <-c.panEndChan:
 			c.panStart, c.panOrigin = image.Point{}, image.Point{}
 		case imgs := <-c.imageInChan:
-			c.newImages(imgs)
+			images := make([]image.Image, len(imgs))
+			for i := range imgs {
+				images[i] = imgs[i].GetImage()
+			}
+			if t := imgs[0].GetImgInfo().CreationTs; !t.IsZero() {
+				c.name = t.Format("05.000000")
+			} else if path := imgs[0].GetImgInfo().Path; len(path) > 0 {
+				c.name = filepath.Base(path)
+			}
+			c.newImages(images)
 			c.display(c.origin)
 		}
 	}
@@ -142,7 +153,7 @@ func (c *canv) run() {
 // canvas is meant to be run as a single goroutine that maintains the state
 // of the image viewer. It manipulates state by reading values from the channels
 // defined in the 'chans' type.
-func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []image.Image) chans {
+func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.Img) chans {
 	chans := chans{
 		drawChan:          make(chan func(pt image.Point) image.Point, 0),
 		resizeToImageChan: make(chan struct{}, 0),

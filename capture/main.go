@@ -1,24 +1,20 @@
 package main
 
 import (
-	// "bytes"
-	"code.google.com/p/ncabatoff/v4l"
 	"code.google.com/p/ncabatoff/imglib"
+	"code.google.com/p/ncabatoff/imgseq"
+	"code.google.com/p/ncabatoff/v4l"
+	"code.google.com/p/ncabatoff/vlib"
 	"flag"
 	"fmt"
-	"os"
-	"time"
-	"runtime"
 	"github.com/golang/glog"
+	"image"
+	"os"
+	"runtime"
+	"time"
 )
 
 // import "github.com/davecheney/profile"
-
-type simage struct {
-	seq int
-	tm  time.Time
-	pix []byte
-}
 
 var flagInput = flag.String("in", "/dev/video0", "input capture device")
 var flagOutfile = flag.String("outfile", "", "write frames consecutively to output file, overwriting if exists")
@@ -29,6 +25,7 @@ var flagFormat = flag.String("format", "yuv", "format yuv or rgb or jpg")
 var flagFrames = flag.Int("frames", 0, "frames to capture")
 var flagDiscard = flag.Bool("discard", false, "discard frames")
 var flagFps = flag.Int("fps", 0, "frames per second")
+var flagDisplay = flag.Bool("display", false, "display images")
 
 func main() {
 	// defer profile.Start(profile.MemProfile).Stop()
@@ -41,7 +38,7 @@ func main() {
 	}()
 
 	// imageInChan is where images enter the system
-	imageInChan := make(chan simage)
+	imageInChan := make(chan imgseq.Img)
 
 	dev := initCaptureDevice(*flagInput)
 	defer func(dev *v4l.Device) {
@@ -59,8 +56,9 @@ func main() {
 			glog.Fatalf("unable to open output '%s': %v", *flagOutfile, err)
 		} else {
 			for simg := range imageInChan {
-				if _, err = outfile.Write(simg.pix); err != nil {
-					glog.Fatalf("error writing frame %d: %v", simg.seq, err)
+				pix := simg.GetPixelSequence().ImageBytes.GetBytes()
+				if _, err = outfile.Write(pix); err != nil {
+					glog.Fatalf("error writing frame %d: %v", simg.GetImgInfo().SeqNum, err)
 				}
 			}
 		}
@@ -121,18 +119,56 @@ func initCaptureDevice(path string) *v4l.Device {
 	return dev
 }
 
-func writeImages(in chan simage) {
+func writeImages(in chan imgseq.Img) {
+	imgdisp := make(chan []imgseq.Img, 1)
+	if *flagDisplay {
+		go vlib.StreamImages(imgdisp)
+	}
 	for simg := range in {
-		i := simg.seq
-		fname := fmt.Sprintf("test%019d.%s", simg.tm.UnixNano(), *flagFormat)
-		logsince(simg.tm, "%d D starting write of image %s", i, fname)
+		i := simg.GetImgInfo().SeqNum
+		cts := simg.GetImgInfo().CreationTs
+		fname := imgseq.TimeToFname("test", cts) + ".yuv"
+		logsince(cts, "%d D starting write of image %s", i, fname)
 		start := time.Now()
 		file, err := os.Create(fname)
 		if err == nil {
-			_, err = file.Write(simg.pix)
+			_, err = file.Write(simg.GetPixelSequence().ImageBytes.GetBytes())
 		}
 		logsince(start, "%d F wrote image %s, err=%v", i, fname, err)
+
+		if *flagDisplay {
+			display(imgdisp, simg)
+		}
 	}
+}
+
+func convertYuyv(img imgseq.Img) image.Image {
+	if _, ok := img.GetPixelSequence().ImageBytes.(imglib.YuyvBytes); !ok {
+		return img.GetImage()
+	}
+	r := image.Rect(0, 0, *flagWidth, *flagHeight)
+	pix := img.GetPixelSequence().ImageBytes.GetBytes()
+	yuyv := &imglib.YUYV{Pix: pix, Rect: r, Stride: *flagWidth * 2}
+	var img1 image.Image
+	logtime(func() {img1 = imglib.StdImage{yuyv}.GetRGBA()}, "%d converted to RGBA", img.GetImgInfo().SeqNum)
+	return img1
+}
+
+func display(imgdisp chan []imgseq.Img, img imgseq.Img) {
+	sendstart := time.Now()
+	imginfo := img.GetImgInfo()
+	rawimg := imgseq.RawImg{imginfo, imglib.GetPixelSequence(convertYuyv(img))}
+	select {
+	case imgdisp <- []imgseq.Img{&rawimg}:
+		logsince(sendstart, "%d sent image to be displayed", imginfo.SeqNum)
+	default:
+	}
+}
+
+func logtime(f func(), fs string, opt ...interface{}) {
+	start := time.Now()
+	f()
+	logsince(start, fs, opt...)
 }
 
 func logsince(start time.Time, fs string, opt ...interface{}) {
@@ -143,10 +179,13 @@ func lp(fs string, opt ...interface{}) {
 	glog.V(1).Infof("         %s", fmt.Sprintf(fs, opt...))
 }
 
-func fetchImages(dev *v4l.Device, imageChan chan simage) {
+func fetchImages(dev *v4l.Device, imageChan chan imgseq.Img) {
 	lp("starting capture")
-	bufrel := make(chan v4l.Frame, *flagNumBufs)
-	go func(in chan v4l.Frame) {
+	bufrel := make(chan v4l.AllocFrame, *flagNumBufs)
+	defer func() {
+		close(bufrel)
+	}()
+	go func(in chan v4l.AllocFrame) {
 		for h := range in {
 			start := time.Now()
 			err := dev.DoneFrame(h)
@@ -159,24 +198,21 @@ func fetchImages(dev *v4l.Device, imageChan chan simage) {
 	i := 0
 	for {
 		start := time.Now()
-		frame, err := dev.GetFrame()
-		newFrame := frame.CopyPix()
-		if frame.FormatId == v4l.FormatYuyv {
-			// For some unfathomable reason, my PS3 Eye suddenly 
-			// decided to start returning 320x240 YUYV images a hair
-			// bigger than they ought to be.  I'm at a loss to say why,
-			// and other webcams don't have this issue.  Anyway,
-			// easy workaround:
-			pixelCount := frame.Height * frame.Width
-			maxLen := imglib.YuyvBytes{}.GetBytesPerPixel() * pixelCount
-			newFrame.Pix = newFrame.Pix[:maxLen]
+		var safeframe v4l.FreeFrame
+		if frame, err := dev.GetFrame(); err != nil {
+			glog.Fatalf("error reading frame: %v", err)
+		} else {
+			logsince(start, "%d got %s frame bufnum=%d bytes=%d", i, *flagFormat, frame.GetBufNum(), len(frame.Pix))
+			safeframe = frame.Copy()
+			bufrel <- frame
 		}
-		bufrel <- frame
-		logsince(start, "%d got %s frame bytes=%d", i, *flagFormat, len(newFrame.Pix))
+		if ps, err := safeframe.GetPixelSequence(); err != nil {
+			glog.Fatalf("error getting pixel seq: %v", err)
+		} else {
+			iinfo := imgseq.ImgInfo{SeqNum: i, CreationTs: safeframe.ReqTime}
+			imageChan <- &imgseq.RawImg{iinfo, *ps}
+		}
 
-		if err == nil {
-			imageChan <- simage{pix: newFrame.Pix, seq: i, tm: newFrame.ReqTime}
-		}
 		i++
 		if *flagFrames == i {
 			close(imageChan)
