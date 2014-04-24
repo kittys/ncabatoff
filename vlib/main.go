@@ -3,8 +3,8 @@ package vlib
 import (
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
-	"github.com/golang/glog"
 	"code.google.com/p/ncabatoff/imgseq"
+	"github.com/golang/glog"
 )
 
 var (
@@ -54,7 +54,7 @@ var (
 	}
 )
 
-func ViewImages(fetcher ImageFetcher, millis int) {
+func ViewImages(fetcher ImageFetcher, millis int, firstframe int) {
 	// Connect to X and quit if we fail.
 	X, err := xgbutil.NewConn()
 	if err != nil {
@@ -63,7 +63,7 @@ func ViewImages(fetcher ImageFetcher, millis int) {
 
 	// Create the X window before starting anything so that the user knows
 	// something is going on.
-	Canvas(X, fetcher, nil, millis)
+	Canvas(X, fetcher, nil, millis, firstframe)
 
 	// Start the main X event loop.
 	xevent.Main(X)
@@ -78,7 +78,7 @@ func StreamImages(imageInChan chan []imgseq.Img) {
 
 	// Create the X window before starting anything so that the user knows
 	// something is going on.
-	Canvas(X, nil, imageInChan, 0)
+	Canvas(X, nil, imageInChan, 0, 0)
 
 	// Start the main X event loop.
 	xevent.Main(X)

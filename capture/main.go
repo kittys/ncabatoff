@@ -17,6 +17,7 @@ import (
 // import "github.com/davecheney/profile"
 
 var flagInput = flag.String("in", "/dev/video0", "input capture device")
+var flagOutfile = flag.String("outfile", "", "write frames consecutively to output file, overwriting if exists")
 var flagNumBufs = flag.Int("numbufs", 30, "number of mmap buffers")
 var flagWidth = flag.Int("width", 640, "width in pixels")
 var flagHeight = flag.Int("height", 480, "height in pixels")
@@ -45,14 +46,26 @@ func main() {
 	if *flagDisplay {
 		go vlib.StreamImages(imgdisp)
 	}
+
+	var outfile *os.File
+	if *flagOutfile != "" {
+		if f, err := os.OpenFile(*flagOutfile, os.O_WRONLY|os.O_CREATE, 0777); err != nil {
+			glog.Fatalf("unable to open output '%s': %v", *flagOutfile, err)
+		} else {
+			outfile = f
+		}
+	}
+
 	i := 1
 	for simg := range cs.GetOutput() {
 		if i == *flagFrames {
 			break
 		}
 		i++
-		if ! *flagDiscard {
-			writeImage(simg)
+		if *flagOutfile != "" {
+			writeImage(outfile, simg)
+		} else if ! *flagDiscard {
+			writeImageToNewFile(simg)
 		}
 		if *flagDisplay {
 			display(imgdisp, simg)
@@ -60,7 +73,7 @@ func main() {
 	}
 }
 
-func writeImage(simg imgseq.Img) {
+func writeImageToNewFile(simg imgseq.Img) {
 	i := simg.GetImgInfo().SeqNum
 	cts := simg.GetImgInfo().CreationTs
 	fname := imgseq.TimeToFname("test", cts) + ".yuv"
@@ -68,9 +81,16 @@ func writeImage(simg imgseq.Img) {
 	start := time.Now()
 	file, err := os.Create(fname)
 	if err == nil {
-		_, err = file.Write(simg.GetPixelSequence().ImageBytes.GetBytes())
+		writeImage(file, simg)
 	}
 	logsince(start, "%d F wrote image %s, err=%v", i, fname, err)
+}
+
+func writeImage(outfile *os.File, simg imgseq.Img) {
+	pix := simg.GetPixelSequence().ImageBytes.GetBytes()
+	if _, err := outfile.Write(pix); err != nil {
+		glog.Fatalf("error writing frame %d: %v", simg.GetImgInfo().SeqNum, err)
+	}
 }
 
 func convertYuyv(img imgseq.Img) image.Image {

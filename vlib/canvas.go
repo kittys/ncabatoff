@@ -10,6 +10,7 @@ import (
 	"github.com/BurntSushi/xgbutil/xgraphics"
 	"github.com/golang/glog"
 	"code.google.com/p/ncabatoff/imgseq"
+	"code.google.com/p/ncabatoff/imglib"
 )
 
 // chans is a group of channels used to communicate with the canvas goroutine.
@@ -39,7 +40,7 @@ type chans struct {
 	tickChan <-chan time.Time
 }
 
-type ImageFetcher func(i int) (int, []image.Image)
+type ImageFetcher func(i int) (int, []imgseq.Img)
 
 type canv struct {
 	chans
@@ -68,11 +69,15 @@ func (c *canv) clearimgs() {
 }
 
 // setup a new set of images; this does everything except paint them to the screen
-func (c *canv) newImages(imgs []image.Image) {
+func (c *canv) newImages(imgs []imgseq.Img) {
 	c.clearimgs()
 	c.imgs = c.imgs[:0]
 
-	for _, img := range imgs {
+	for _, simg := range imgs {
+		img := simg.GetImage()
+		if yuyv, ok := img.(*imglib.YUYV); ok {
+			img = imglib.StdImage{yuyv}.GetRGBA()
+		}
 		c.imgs = append(c.imgs, draw(xgraphics.NewConvert(c.X, img)))
 	}
 }
@@ -139,18 +144,6 @@ func (c *canv) run() {
 				image.Point{xd + c.panOrigin.X, yd + c.panOrigin.Y})
 		case <-c.panEndChan:
 			c.panStart, c.panOrigin = image.Point{}, image.Point{}
-		case imgs := <-c.imageInChan:
-			images := make([]image.Image, len(imgs))
-			for i := range imgs {
-				images[i] = imgs[i].GetImage()
-			}
-			if t := imgs[0].GetImgInfo().CreationTs; !t.IsZero() {
-				c.name = t.Format("05.000000")
-			} else if path := imgs[0].GetImgInfo().Path; len(path) > 0 {
-				c.name = filepath.Base(path)
-			}
-			c.newImages(images)
-			c.display(c.origin)
 		case <-c.playChan:
 			if c.tickChan != nil {
 				c.ticker.Stop()
@@ -162,6 +155,14 @@ func (c *canv) run() {
 			}
 		case <-c.tickChan:
 			c.setImage(c.current+1, c.origin)
+		case imgs := <-c.imageInChan:
+			if t := imgs[0].GetImgInfo().CreationTs; !t.IsZero() {
+				c.name = t.Format("05.000000")
+			} else if path := imgs[0].GetImgInfo().Path; len(path) > 0 {
+				c.name = filepath.Base(path)
+			}
+			c.newImages(imgs)
+			c.display(c.origin)
 		}
 	}
 }
@@ -169,7 +170,7 @@ func (c *canv) run() {
 // canvas is meant to be run as a single goroutine that maintains the state
 // of the image viewer. It manipulates state by reading values from the channels
 // defined in the 'chans' type.
-func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.Img, tickMillis int ) chans {
+func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.Img, tickMillis int, frameStart int) chans {
 	chans := chans{
 		drawChan:          make(chan func(pt image.Point) image.Point, 0),
 		resizeToImageChan: make(chan struct{}, 0),
@@ -186,6 +187,7 @@ func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.
 		imageFetcher: getImages,
 		X: X,
 		tickMillis: tickMillis,
+		current: frameStart,
 	}
 
 	go canv.run()

@@ -42,6 +42,8 @@ var (
 	flagMinArea       int
 	flagMaxArea       int
 	flagMinSquareness int
+	flagMillis int
+	flagStart int
 )
 
 func init() {
@@ -61,9 +63,10 @@ func init() {
 		"If set, a CPU profile will be saved to the file name provided.")
 	flag.BoolVar(&flagKeybindings, "keybindings", false,
 		"If set, bv will output a list all keybindings.")
-
-	// flag.IntVar(&flagStartFrame, "start", 0,
-	//		"If set, bv will start at this frame")
+	flag.IntVar(&flagMillis, "millis", 20,
+		"Millisecond delay between frames in play mode")
+	flag.IntVar(&flagStart, "start", 0,
+		"starting frame")
 
 	flag.IntVar(&flagDeltaThresh, "deltaThresh", 32*69,
 		"The delta filter threshold.")
@@ -139,7 +142,7 @@ func filtRects(rects []image.Rectangle) []image.Rectangle {
 	return out
 }
 
-func viewDir(path string) {
+func getDirList(path string) imgseq.DirList {
 	dl := imgseq.GetDirList(path)
 	filtdl := dl
 	filtdl.Files = make([]string, 0, len(dl.Files))
@@ -148,30 +151,64 @@ func viewDir(path string) {
 			filtdl.Files = append(filtdl.Files, fn)
 		}
 	}
-
-	imgin := make(chan imgseq.Img, 100)
-	go imgseq.LoadRawImgs(filtdl, imgin)
-	imgout := make(chan []imgseq.Img)
-
-	go vlib.StreamImages(imgout)
-	filterInactive(imgin, imgout)
-	close(imgout)
+	return filtdl
 }
 
-func filterInactive(imgin chan imgseq.Img, imgout chan []imgseq.Img) {
+func viewDir(path string) {
+	dl := getDirList(path)
+	iinfos := dl.ImgInfos()
+
 	trk := motion.NewTracker()
-	for simg := range imgin {
-		oimg := simg.GetImage()
-		iinfo := simg.GetImgInfo()
-		glog.V(1).Infof("filtering %s img %v", oimg.Bounds(), iinfo)
-		if rs := trk.GetRects(simg, flagDeltaThresh); len(rs) > 0 {
-			rs = filtRects(rs)
-			sort.Sort(motion.RectAreaSlice(rs))
-			ops := imglib.GetPixelSequence(imglib.StdImage{oimg}.GetRGBA())
-			rps := imglib.GetPixelSequence(getRectImage(simg, rs))
-			imgout <- []imgseq.Img{&imgseq.RawImg{iinfo, ops}, &imgseq.RawImg{iinfo, rps}}
-		}
+
+	lasti := 0
+	for i := 0; i <= motion.LAVGN; i++ {
+		trk.GetRects(imgseq.LoadRawImg(dl.ImgInfos()[i]), flagDeltaThresh)
+		lasti++
 	}
+
+	vlib.ViewImages(func(i int) (int, []imgseq.Img) {
+		lg("got %d", i)
+		if i >= len(iinfos) {
+			i = 0
+		}
+		if i < motion.LAVGN {
+			i = motion.LAVGN - 1
+		}
+		if i != lasti+1 {
+			trk = motion.NewTracker()
+			for j := i; j <= i+motion.LAVGN; j++ {
+				trk.GetRects(imgseq.LoadRawImg(dl.ImgInfos()[j]), flagDeltaThresh)
+			}
+		}
+		defer func() {
+			lasti = i
+		}()
+
+		for {
+			img := imgseq.LoadRawImg(dl.ImgInfos()[i])
+			if imgout := filterInactive(trk, img); len(imgout) > 0 {
+				return i, imgout
+			}
+		}
+	}, flagMillis, flagStart)
+}
+
+func filterInactive(trk *motion.Tracker, simg imgseq.Img) []imgseq.Img {
+	oimg := simg.GetImage()
+	iinfo := simg.GetImgInfo()
+	glog.V(1).Infof("filtering %s img %v", oimg.Bounds(), iinfo)
+	rs := trk.GetRects(simg, flagDeltaThresh)
+	if len(rs) == 0 {
+		return []imgseq.Img{}
+	}
+	rs = filtRects(rs)
+	if len(rs) == 0 {
+		return []imgseq.Img{}
+	}
+	sort.Sort(motion.RectAreaSlice(rs))
+	ops := imglib.GetPixelSequence(imglib.StdImage{oimg}.GetRGBA())
+	rps := imglib.GetPixelSequence(getRectImage(simg, rs))
+	return []imgseq.Img{&imgseq.RawImg{iinfo, ops}, &imgseq.RawImg{iinfo, rps}}
 }
 
 func getRectImage(simg imgseq.Img, rects []image.Rectangle) image.Image {

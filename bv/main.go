@@ -36,6 +36,7 @@ var (
 	flagKeybindings bool
 
 	flagMillis int
+	flagStart int
 )
 
 func init() {
@@ -55,8 +56,10 @@ func init() {
 		"If set, a CPU profile will be saved to the file name provided.")
 	flag.BoolVar(&flagKeybindings, "keybindings", false,
 		"If set, bv will output a list all keybindings.")
-	flag.IntVar(&flagMillis, "framemillis", 20,
+	flag.IntVar(&flagMillis, "millis", 20,
 		"Millisecond delay between frames in play mode")
+	flag.IntVar(&flagStart, "start", 0,
+		"starting frame")
 
 	// flag.IntVar(&flagStartFrame, "start", 0,
 	//		"If set, bv will start at this frame")
@@ -125,7 +128,7 @@ func viewDir(path string) {
 	// imgs := make([]imgseq.Img, len(dl.Files))
 
 	glog.Infof("starting viewer for %d images", len(iinfos))
-	vlib.ViewImages(func(i int) (int, []image.Image) {
+	vlib.ViewImages(func(i int) (int, []imgseq.Img) {
 		lg("got %d", i)
 		if i >= len(iinfos) {
 			i = 0
@@ -133,12 +136,8 @@ func viewDir(path string) {
 		if i < 0 {
 			i = len(iinfos) - 1
 		}
-		img := imgseq.LoadRawImg(dl.ImgInfos()[i]).GetImage()
-		if yuyv, ok := img.(*imglib.YUYV); ok {
-			img = imglib.StdImage{yuyv}.GetRGBA()
-		}
-		return i, []image.Image{img}
-	}, flagMillis)
+		return i, []imgseq.Img{imgseq.LoadRawImg(dl.ImgInfos()[i])}
+	}, flagMillis, flagStart)
 }
 
 func viewFileMmap(path string) {
@@ -167,7 +166,7 @@ func viewFileMmap(path string) {
 		lp("unmap err=%v", err)
 	}(buffer)
 
-	vlib.ViewImages(func(i int) (int, []image.Image) {
+	vlib.ViewImages(func(i int) (int, []imgseq.Img) {
 		lg("got %d", i)
 		if i >= numimgs {
 			i = 0
@@ -176,9 +175,11 @@ func viewFileMmap(path string) {
 			i = numimgs - 1
 		}
 		pix := buffer[imgsize*i:imgsize*i+imgsize]
-		yuyv := imglib.YUYV{Pix: pix, Stride: rect.Dx()*2, Rect: rect}
-		return i, []image.Image{imglib.StdImage{&yuyv}.GetRGBA()}
-	}, flagMillis)
+		yuyv := &imglib.YUYV{Pix: pix, Stride: rect.Dx()*2, Rect: rect}
+		iinfo := imgseq.ImgInfo{SeqNum: i}
+		img := &imgseq.RawImg{iinfo, imglib.GetPixelSequence(yuyv)}
+		return i, []imgseq.Img{img}
+	}, flagMillis, flagStart)
 }
 
 func getFileAndSize(path string) (*os.File, int64) {
