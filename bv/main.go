@@ -36,9 +36,7 @@ var (
 	// When set, bv will print all keybindings and exit.
 	flagKeybindings bool
 
-	// A list of keybindings. Each value corresponds to a triple of the key
-	// sequence to bind to, the action to run when that key sequence is
-	// pressed and a quick description of what the keybinding does.
+	flagMillis int
 )
 
 func init() {
@@ -58,6 +56,8 @@ func init() {
 		"If set, a CPU profile will be saved to the file name provided.")
 	flag.BoolVar(&flagKeybindings, "keybindings", false,
 		"If set, bv will output a list all keybindings.")
+	flag.IntVar(&flagMillis, "framemillis", 20,
+		"Millisecond delay between frames in play mode")
 
 	// flag.IntVar(&flagStartFrame, "start", 0,
 	//		"If set, bv will start at this frame")
@@ -146,7 +146,7 @@ func viewDir(path string) {
 			img = imglib.StdImage{yuyv}.GetRGBA()
 		}
 		return i, []image.Image{img}
-	})
+	}, flagMillis)
 }
 
 func viewFileMmap(path string) {
@@ -186,7 +186,7 @@ func viewFileMmap(path string) {
 		pix := buffer[imgsize*i:imgsize*i+imgsize]
 		yuyv := imglib.YUYV{Pix: pix, Stride: rect.Dx()*2, Rect: rect}
 		return i, []image.Image{imglib.StdImage{&yuyv}.GetRGBA()}
-	})
+	}, flagMillis)
 }
 
 func getFileAndSize(path string) (*os.File, int64) {
@@ -228,5 +228,5 @@ func viewDevice(path string) {
 		}
 
 		return i, []image.Image{imglib.StdImage{yuyv}.GetRGBA()}
-	})
+	}, flagMillis)
 }

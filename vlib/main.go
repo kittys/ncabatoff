@@ -45,12 +45,16 @@ var (
 			"l", "Pan right.", func(w *window) { w.stepRight() },
 		},
 		{
+			"p", "Play/Pause.",
+			func(w *window) { w.chans.playChan <- struct{}{} },
+		},
+		{
 			"q", "Quit.", func(w *window) { xevent.Quit(w.X) },
 		},
 	}
 )
 
-func ViewImages(fetcher ImageFetcher) {
+func ViewImages(fetcher ImageFetcher, millis int) {
 	// Connect to X and quit if we fail.
 	X, err := xgbutil.NewConn()
 	if err != nil {
@@ -59,7 +63,7 @@ func ViewImages(fetcher ImageFetcher) {
 
 	// Create the X window before starting anything so that the user knows
 	// something is going on.
-	Canvas(X, fetcher, nil)
+	Canvas(X, fetcher, nil, millis)
 
 	// Start the main X event loop.
 	xevent.Main(X)
@@ -74,7 +78,7 @@ func StreamImages(imageInChan chan []imgseq.Img) {
 
 	// Create the X window before starting anything so that the user knows
 	// something is going on.
-	Canvas(X, nil, imageInChan)
+	Canvas(X, nil, imageInChan, 0)
 
 	// Start the main X event loop.
 	xevent.Main(X)

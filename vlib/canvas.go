@@ -35,6 +35,8 @@ type chans struct {
 	panEndChan   chan image.Point
 
 	imageInChan  chan []imgseq.Img
+	playChan  chan struct{}
+	tickChan <-chan time.Time
 }
 
 type ImageFetcher func(i int) (int, []image.Image)
@@ -50,6 +52,9 @@ type canv struct {
 	name string
 	imageFetcher ImageFetcher
 	X *xgbutil.XUtil
+	playing bool
+	ticker *time.Ticker
+	tickMillis int
 }
 
 // Release the memory allocated in draw()
@@ -146,6 +151,17 @@ func (c *canv) run() {
 			}
 			c.newImages(images)
 			c.display(c.origin)
+		case <-c.playChan:
+			if c.tickChan != nil {
+				c.ticker.Stop()
+				c.tickChan = nil
+			} else {
+				delay := time.Millisecond * time.Duration(c.tickMillis)
+				c.ticker = time.NewTicker(delay)
+				c.tickChan = c.ticker.C
+			}
+		case <-c.tickChan:
+			c.setImage(c.current+1, c.origin)
 		}
 	}
 }
@@ -153,7 +169,7 @@ func (c *canv) run() {
 // canvas is meant to be run as a single goroutine that maintains the state
 // of the image viewer. It manipulates state by reading values from the channels
 // defined in the 'chans' type.
-func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.Img) chans {
+func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.Img, tickMillis int ) chans {
 	chans := chans{
 		drawChan:          make(chan func(pt image.Point) image.Point, 0),
 		resizeToImageChan: make(chan struct{}, 0),
@@ -163,11 +179,13 @@ func Canvas(X *xgbutil.XUtil, getImages ImageFetcher, imageInChan chan []imgseq.
 		panStepChan:       make(chan image.Point, 0),
 		panEndChan:        make(chan image.Point, 0),
 		imageInChan:       imageInChan,
+		playChan:          make(chan struct{}, 0),
 	}
 	canv := canv {
 		chans: chans,
 		imageFetcher: getImages,
 		X: X,
+		tickMillis: tickMillis,
 	}
 
 	go canv.run()
