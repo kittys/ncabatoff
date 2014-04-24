@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/golang/glog"
 	"image"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
