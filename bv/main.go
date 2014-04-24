@@ -117,31 +117,24 @@ func main() {
 		viewDir(flag.Arg(0))
 	} else if fi.Mode().IsRegular() {
 		viewFileMmap(flag.Arg(0))
-	} else {
-		viewDevice(flag.Arg(0))
 	}
 }
 
 func viewDir(path string) {
 	dl := imgseq.GetDirList(path)
-	imgs := make([]imgseq.Img, 0, 100)
-	imagechan := make(chan imgseq.Img)
-	go imgseq.LoadRawImgs(dl, imagechan)
+	iinfos := dl.ImgInfos()
+	// imgs := make([]imgseq.Img, len(dl.Files))
 
-	for img := range imagechan {
-		imgs = append(imgs, img)
-	}
-
-	glog.Infof("starting viewer for %d images", len(imgs))
+	glog.Infof("starting viewer for %d images", len(iinfos))
 	vlib.ViewImages(func(i int) (int, []image.Image) {
 		lg("got %d", i)
-		if i >= len(imgs) {
+		if i >= len(iinfos) {
 			i = 0
 		}
 		if i < 0 {
-			i = len(imgs) - 1
+			i = len(iinfos) - 1
 		}
-		img := imgs[i].GetImage()
+		img := imgseq.LoadRawImg(dl.ImgInfos()[i]).GetImage()
 		if yuyv, ok := img.(*imglib.YUYV); ok {
 			img = imglib.StdImage{yuyv}.GetRGBA()
 		}
@@ -202,31 +195,3 @@ func getFileAndSize(path string) (*os.File, int64) {
 	return nil, 0
 }
 
-func viewDevice(path string) {
-	rect := image.Rect(0, 0, flagWidth, flagHeight)
-	imgsize := 2*(rect.Size().X * rect.Size().Y)
-	fl, _ := getFileAndSize(path)
-	// lp("devsize=%d", devSize)
-	// numimgs := int(devSize) / imgsize
-
-	lasti := -1
-	yuyv := imglib.NewYUYV(rect)
-	vlib.ViewImages(func(i int) (int, []image.Image) {
-		lg("got %d", i)
-		if i != lasti+1 {
-			if newpos, err := fl.Seek(int64(i*imgsize), os.SEEK_SET); err != nil {
-				glog.Fatalf("seek failure: lastpos=%d, endpos=%d, err=%v", lasti*imgsize, newpos, err)
-			}
-		}
-
-		if _, err := fl.Read(yuyv.Pix); err != nil {
-			if err != io.EOF {
-				glog.Fatalf("error reading: %v", err)
-			} else {
-				lasti = i
-			}
-		}
-
-		return i, []image.Image{imglib.StdImage{yuyv}.GetRGBA()}
-	}, flagMillis)
-}
