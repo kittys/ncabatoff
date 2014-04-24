@@ -99,25 +99,33 @@ func (rj *rectjoiner) addrow(rs []image.Rectangle) {
 	}
 }
 
-func (rj *rectjoiner) merge(rs []image.Rectangle) {
-	rj.slate.clean()
-	rj.slate.drawall()
-
-	for i := range rs {
-		rj.slate.add(rs[i])
-	}
-
-	rj.rectbuf = rj.rectbuf[:0]
+func (rj *rectjoiner) removeAboveY(y int) {
 	for _, r := range rj.rects {
 		if r != image.ZR {
-			if r.Max.Y < rs[0].Max.Y {
+			if r.Max.Y < y {
 				rj.done = append(rj.done, r)
 			} else {
 				rj.rectbuf = append(rj.rectbuf, r)
 			}
 		}
 	}
-	rj.rectbuf, rj.rects = rj.rects, rj.rectbuf
+	// rectbuf is a temporary variable, but we preserve it in rj
+	// to avoid allocation
+	rj.rectbuf, rj.rects = rj.rects[:0], rj.rectbuf
+}
+
+
+// 1. wipe slate
+// 2. draw all in-progress rects to slate
+// 3. add all the new 1d rects to slate
+// 4. mark done all the in-progress rects that don't extend to current row
+func (rj *rectjoiner) merge(rs []image.Rectangle) {
+	rj.slate.clean()
+	rj.slate.drawall()
+	for _, r := range rs {
+		rj.slate.add(r)
+	}
+	rj.removeAboveY(rs[0].Max.Y)
 }
 
 // Given a slice of RowRects , return the rectangles formed by uniting adjacent
