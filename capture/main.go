@@ -1,14 +1,12 @@
 package main
 
 import (
-	"code.google.com/p/ncabatoff/imglib"
 	"code.google.com/p/ncabatoff/imgseq"
 	"code.google.com/p/ncabatoff/v4l"
 	"code.google.com/p/ncabatoff/vlib"
 	"flag"
 	"fmt"
 	"github.com/golang/glog"
-	"image"
 	"os"
 	"runtime"
 	"time"
@@ -18,16 +16,25 @@ import (
 
 var flagInput = flag.String("in", "/dev/video0", "input capture device")
 var flagOutfile = flag.String("outfile", "", "write frames consecutively to output file, overwriting if exists")
-var flagNumBufs = flag.Int("numbufs", 30, "number of mmap buffers")
 var flagWidth = flag.Int("width", 640, "width in pixels")
 var flagHeight = flag.Int("height", 480, "height in pixels")
-var flagFormat = flag.String("format", "yuv", "format yuv or rgb or jpg")
+var flagFormat = flag.String("format", "yuv", "format yuv or rgb")
 var flagFrames = flag.Int("frames", 0, "frames to capture")
 var flagDiscard = flag.Bool("discard", false, "discard frames")
 var flagFps = flag.Int("fps", 0, "frames per second")
 var flagDisplay = flag.Bool("display", false, "display images")
 
 func main() {
+	flag.Usage = func() {
+	    fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+	    flag.PrintDefaults()
+	    fmt.Fprintf(os.Stderr, `\ncapture reads from a video device like a webcam.  
+By default images are written to the current dir in .yuv files.
+Use -outfile to write all frames to a single file instead.
+Use -discard to not write any data to disk at all; normally used with -display.
+`)
+	}
+
 	// defer profile.Start(profile.MemProfile).Stop()
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -93,25 +100,11 @@ func writeImage(outfile *os.File, simg imgseq.Img) {
 	}
 }
 
-func convertYuyv(img imgseq.Img) image.Image {
-	if _, ok := img.GetPixelSequence().ImageBytes.(imglib.YuyvBytes); !ok {
-		return img.GetImage()
-	}
-	r := image.Rect(0, 0, *flagWidth, *flagHeight)
-	pix := img.GetPixelSequence().ImageBytes.GetBytes()
-	yuyv := &imglib.YUYV{Pix: pix, Rect: r, Stride: *flagWidth * 2}
-	var img1 image.Image
-	logtime(func() {img1 = imglib.StdImage{yuyv}.GetRGBA()}, "%d converted to RGBA", img.GetImgInfo().SeqNum)
-	return img1
-}
-
 func display(imgdisp chan []imgseq.Img, img imgseq.Img) {
 	sendstart := time.Now()
-	imginfo := img.GetImgInfo()
-	rawimg := imgseq.RawImg{imginfo, imglib.GetPixelSequence(convertYuyv(img))}
 	select {
-	case imgdisp <- []imgseq.Img{&rawimg}:
-		logsince(sendstart, "%d sent image to be displayed", imginfo.SeqNum)
+	case imgdisp <- []imgseq.Img{img}:
+		logsince(sendstart, "%d sent image to be displayed", img.GetImgInfo().SeqNum)
 	default:
 	}
 }
