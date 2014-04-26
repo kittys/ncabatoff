@@ -20,12 +20,10 @@ import (
 // import "github.com/davecheney/profile"
 
 var flagInput = flag.String("in", "/dev/video0", "input capture device")
-var flagNumBufs = flag.Int("numbufs", 30, "number of mmap buffers")
 var flagWidth = flag.Int("width", 640, "width in pixels")
 var flagHeight = flag.Int("height", 480, "height in pixels")
 var flagFormat = flag.String("format", "yuv", "format yuv or rgb or jpg")
 var flagFrames = flag.Int("frames", 0, "frames to capture")
-var flagDiscard = flag.Bool("discard", false, "discard frames")
 var flagFps = flag.Int("fps", 0, "frames per second")
 var flagDeltaThresh = flag.Int("deltaThresh", 32*69, "delta filter threshold")
 
@@ -72,6 +70,8 @@ func convertYuyv(img imgseq.Img) image.Image {
 func display(trk *motion.Tracker, imgdisp chan []imgseq.Img, img imgseq.Img) {
 	imginfo := img.GetImgInfo()
 
+	// convert to rgba early because we'll have to do so to display anyway,
+	// and getRectImage will draw.Draw faster with input in this format.
 	img1 := imgseq.RawImg{imginfo, imglib.GetPixelSequence(convertYuyv(img))}
 
 	var img2 imgseq.Img
