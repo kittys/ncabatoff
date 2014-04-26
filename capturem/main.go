@@ -1,3 +1,4 @@
+// capturem demonstrates the motion package using input from a video device.
 package main
 
 import (

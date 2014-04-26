@@ -1,3 +1,5 @@
+// mincapturm demonstrates the motion package using input from a video device;
+// this is a stripped-down version of capture used to embed in a presentation.
 package main
 
 import (

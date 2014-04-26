@@ -1,3 +1,4 @@
+// bvm demonstrates the motion package using a directory of images as input.
 package main
 
 import (
@@ -143,15 +144,19 @@ func filtRects(rects []image.Rectangle) []image.Rectangle {
 }
 
 func getDirList(path string) imgseq.DirList {
-	dl := imgseq.GetDirList(path)
-	filtdl := dl
-	filtdl.Files = make([]string, 0, len(dl.Files))
-	for _, fn := range dl.Files {
-		if filepath.Ext(fn) == ".yuv" {
-			filtdl.Files = append(filtdl.Files, fn)
+	if dl, err := imgseq.GetDirList(path); err != nil {
+		glog.Fatalf("error reading directory '%s': %v", path, err)
+		return imgseq.DirList{}
+	} else {
+		filtdl := dl
+		filtdl.Files = make([]string, 0, len(dl.Files))
+		for _, fn := range dl.Files {
+			if filepath.Ext(fn) == ".yuv" {
+				filtdl.Files = append(filtdl.Files, fn)
+			}
 		}
+		return filtdl
 	}
-	return filtdl
 }
 
 func viewDir(path string) {
@@ -162,7 +167,7 @@ func viewDir(path string) {
 
 	lasti := 0
 	for i := 0; i <= motion.LAVGN; i++ {
-		trk.GetRects(imgseq.LoadRawImg(dl.ImgInfos()[i]), flagDeltaThresh)
+		trk.GetRects(imgseq.LoadRawImgOrDie(dl.ImgInfos()[i]), flagDeltaThresh)
 		lasti++
 	}
 
@@ -177,7 +182,7 @@ func viewDir(path string) {
 		if i != lasti+1 {
 			trk = motion.NewTracker()
 			for j := i; j <= i+motion.LAVGN; j++ {
-				trk.GetRects(imgseq.LoadRawImg(dl.ImgInfos()[j]), flagDeltaThresh)
+				trk.GetRects(imgseq.LoadRawImgOrDie(dl.ImgInfos()[j]), flagDeltaThresh)
 			}
 		}
 		defer func() {
@@ -185,7 +190,7 @@ func viewDir(path string) {
 		}()
 
 		for {
-			img := imgseq.LoadRawImg(dl.ImgInfos()[i])
+			img := imgseq.LoadRawImgOrDie(dl.ImgInfos()[i])
 			if imgout := filterInactive(trk, img); len(imgout) > 0 {
 				return i, imgout
 			}

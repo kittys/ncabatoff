@@ -1,3 +1,4 @@
+// bv is a basic image viewer using code.google.com/p/ncabatoff/vlib.
 package main
 
 import (
@@ -123,21 +124,23 @@ func main() {
 }
 
 func viewDir(path string) {
-	dl := imgseq.GetDirList(path)
-	iinfos := dl.ImgInfos()
-	// imgs := make([]imgseq.Img, len(dl.Files))
+	if dl, err := imgseq.GetDirList(path); err != nil {
+		glog.Fatalf("error reading directory '%s': %v", path, err)
+	} else {
+		iinfos := dl.ImgInfos()
 
-	glog.Infof("starting viewer for %d images", len(iinfos))
-	vlib.ViewImages(func(i int) (int, []imgseq.Img) {
-		lg("got %d", i)
-		if i >= len(iinfos) {
-			i = 0
-		}
-		if i < 0 {
-			i = len(iinfos) - 1
-		}
-		return i, []imgseq.Img{imgseq.LoadRawImg(dl.ImgInfos()[i])}
-	}, flagMillis, flagStart)
+		glog.Infof("starting viewer for %d images", len(iinfos))
+		vlib.ViewImages(func(i int) (int, []imgseq.Img) {
+			lg("got %d", i)
+			if i >= len(iinfos) {
+				i = 0
+			}
+			if i < 0 {
+				i = len(iinfos) - 1
+			}
+			return i, []imgseq.Img{imgseq.LoadRawImgOrDie(dl.ImgInfos()[i])}
+		}, flagMillis, flagStart)
+	}
 }
 
 func viewFileMmap(path string) {

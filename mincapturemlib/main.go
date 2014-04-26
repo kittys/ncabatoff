@@ -1,3 +1,6 @@
+// mincapturemlib demonstrates the motion package using input from a video
+// device; this is a stripped-down library version of capturem used to embed
+// in a presentation.
 package mincapturemlib
 
 import (

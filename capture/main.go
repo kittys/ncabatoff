@@ -1,3 +1,4 @@
+// capture is a simple video capturing program, writing images them to the filesystem and/or displaying them in X11.
 package main
 
 import (

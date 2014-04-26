@@ -5,24 +5,29 @@ import "time"
 import "code.google.com/p/ncabatoff/imgseq"
 import "github.com/golang/glog"
 
+// A CaptureStream is a helpful wrapper around Device which sends images to
+// an output channel.
 type CaptureStream struct {
 	dev *Device
 	output chan imgseq.Img
 	done chan struct{}
 }
 
-func NewStream(path string, fps int, pxlfmt string, width int, height int, output chan imgseq.Img) *CaptureStream {
+// NewStream opens and initializes the device and starts streaming captured
+// images.  Any errors result in a call to glog.Fatalf.  This also applies
+// to errors experienced subsequent to opening the device, i.e. while streaming.
+func NewStream(device string, fps int, pxlfmt string, width int, height int, output chan imgseq.Img) *CaptureStream {
 	if output == nil {
 		output = make(chan imgseq.Img)
 	}
 	cs := &CaptureStream{output: output, done: make(chan struct{})}
 
-	dev, err := OpenDevice(path, false)
+	dev, err := OpenDevice(device, false)
 	if err != nil {
 		glog.Fatalf("%v", err)
 	}
 	cs.dev = dev
-	cs.setFormat(fps, pxlfmt, width, height)
+	cs.setFormatOrDie(fps, pxlfmt, width, height)
 
 	for numbufs := 30; numbufs > 0; numbufs-- {
 		if err = dev.InitBuffers(numbufs); err != nil {
@@ -42,11 +47,13 @@ func NewStream(path string, fps int, pxlfmt string, width int, height int, outpu
 	return cs
 }
 
-
+// GetOutput returns the channel to which captured images are sent.
+// Any failures during capture result in a call to glog.Fatalf.
 func (cs *CaptureStream) GetOutput() <-chan imgseq.Img {
 	return cs.output
 }
 
+// Shutdown stops capturing.
 func (cs *CaptureStream) Shutdown() {
 	cs.done <- struct{}{}
 }
@@ -59,16 +66,20 @@ func logsince(start time.Time, fs string, opt ...interface{}) {
 	glog.V(1).Infof("[%.3fs] %s", time.Since(start).Seconds(), fmt.Sprintf(fs, opt...))
 }
 
+// shutdown stops capturing, closes the output channel, releases buffers, and closes the device.
 func (cs *CaptureStream) shutdown() {
 	lp("shutting down")
-	close(cs.output)
 	lp("streamoff result: %v", cs.dev.EndCapture())
+	close(cs.output)
 	cs.dev.DoneBuffers()
 	lp("close result: %v", cs.dev.CloseDevice())
 	cs.dev, cs.output, cs.done = nil, nil, nil
 }
 
-func (cs *CaptureStream) setFormat(fps int, pxlfmt string, width int, height int) {
+// setFormatOrDie configures the device, calling glog.Fatalf on failures.
+// Since we're writing Img to the output channel and it doesn't presently
+// support anything except yuv and rgb, those are the only formats we accept.
+func (cs *CaptureStream) setFormatOrDie(fps int, pxlfmt string, width int, height int) {
 	fmts, err := cs.dev.GetSupportedFormats()
 	if err != nil {
 		glog.Fatalf("%v", err)
@@ -79,7 +90,6 @@ func (cs *CaptureStream) setFormat(fps int, pxlfmt string, width int, height int
 	switch(pxlfmt) {
 	case "yuv": fmtid = FormatYuyv
 	case "rgb": fmtid = FormatRgb
-	case "jpg": fmtid = FormatJpeg
 	default: glog.Fatalf("Unsupported format '%s'", fmtid)
 	}
 
@@ -107,6 +117,9 @@ func (cs *CaptureStream) setFormat(fps int, pxlfmt string, width int, height int
 	glog.Infof("fps=%d/%d", nom, denom)
 }
 
+// fetchImages contains the main capture loop: asking the device for frames,
+// copying them, releasing the frame buffer back to the device (in another
+// goroutine), and sending the images to the output channel.
 func (cs *CaptureStream) fetchImages() {
 	lp("starting capture")
 	bufrel := make(chan AllocFrame, len(cs.dev.buffers))
