@@ -52,49 +52,24 @@ func main() {
 			break
 		}
 		i++
-		display(trk, imgdisp, simg)
+		if rimg := trackRects(*flagDeltaThresh, trk, simg); rimg != nil {
+			select {
+			case imgdisp <- []imgseq.Img{simg, rimg}:
+			default:
+			}
+		}
 	}
 }
 
-func convertYuyv(img imgseq.Img) image.Image {
-	if _, ok := img.GetPixelSequence().ImageBytes.(imglib.YuyvBytes); !ok {
-		return img.GetImage()
-	}
-	r := image.Rect(0, 0, *flagWidth, *flagHeight)
-	pix := img.GetPixelSequence().ImageBytes.GetBytes()
-	yuyv := &imglib.YUYV{Pix: pix, Rect: r, Stride: *flagWidth * 2}
-	var img1 image.Image
-	logtime(func() {img1 = imglib.StdImage{yuyv}.GetRGBA()}, "%d converted to RGBA", img.GetImgInfo().SeqNum)
-	return img1
-}
-
-func display(trk *motion.Tracker, imgdisp chan []imgseq.Img, img imgseq.Img) {
-	imginfo := img.GetImgInfo()
-
-	// convert to rgba early because we'll have to do so to display anyway,
-	// and getRectImage will draw.Draw faster with input in this format.
-	img1 := imgseq.RawImg{imginfo, imglib.GetPixelSequence(convertYuyv(img))}
-
-	var img2 imgseq.Img
-	if rs := trk.GetRects(img, *flagDeltaThresh); len(rs) > 0 {
+func trackRects(deltaThresh int, trk *motion.Tracker, img imgseq.Img) imgseq.Img {
+	if rs := trk.GetRects(img, deltaThresh); len(rs) > 0 {
 		sort.Sort(motion.RectAreaSlice(rs))
-
-		rimg := getRectImage(img1.GetImage(), rs)
-		img2 = &imgseq.RawImg{imginfo, imglib.GetPixelSequence(rimg)}
+		rimg := getRectImage(img.GetImage(), rs)
+		return &imgseq.RawImg{img.GetImgInfo(), imglib.GetPixelSequence(rimg)}
 	} else {
-		return
+		return nil
 	}
 
-	select {
-	case imgdisp <- []imgseq.Img{&img1, img2}:
-	default:
-	}
-}
-
-func logtime(f func(), fs string, opt ...interface{}) {
-	start := time.Now()
-	f()
-	logsince(start, fs, opt...)
 }
 
 func getRectImage(img image.Image, rects []image.Rectangle) image.Image {
@@ -105,6 +80,12 @@ func getRectImage(img image.Image, rects []image.Rectangle) image.Image {
             draw.Draw(out, r, img, r.Min, draw.Src)
     }
     return out
+}
+
+func logtime(f func(), fs string, opt ...interface{}) {
+	start := time.Now()
+	f()
+	logsince(start, fs, opt...)
 }
 
 func logsince(start time.Time, fs string, opt ...interface{}) {
