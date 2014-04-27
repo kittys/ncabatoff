@@ -1,0 +1,131 @@
+Motion tracking in Go
+Simple homebrew computer vision
+#13:30 26 April 2014
+#Tags: image, motion, performance
+
+Nick Cabatoff
+nick.cabatoff@gmail.com
+https://code.google.com/p/ncabatoff/
+@NickCabatoff
+
+* Thanks To
+
+- Go team for obvious reasons
+- Andrew Gallant for github.com/BurntSushi
+
+* My super-secret get-rich-quick scheme
+
+1. Write software for jugglers
+2. ???
+3. Profit!
+
+* My Go origins story
+
+- Was playing an MMO with lots of boring repetitive tasks
+- I'm lazy, efficient, and full of hubris (former Perl coder)
+- Had to refresh C++ knowledge for work, so I wrote a C++ screen reader
+- Wanted to learn 0mq, didn't want to write more C++ 
+- Go 0mq bindings worked, Perl's didn't (and I don't like Java)
+
+* Project origin story
+
+- girlfriend learning 5 balls
+- wanted a juggling counter
+- been at it for a year, still haven't finished
+
+* Complete code for reading & showing images from a webcam
+
+.play mincapture.go
+
+* Speed addict
+
+- game macro had to be super fast
+- wouldn't settle for slow performance in Go, want real time
+- current target: 125 FPS at 320x240, 60 FPS at 640x480 (ps3 eye)
+- how do you do image processing in Go at those speeds?
+
+* Complete code for finding areas of activity in an image stream (1/3)
+
+.code mincapturem.go 1,/^const/
+
+* Complete code for finding areas of activity in an image stream (2/3)
+
+.code mincapturem.go /^func main/,/^}/
+
+* Complete code for finding areas of activity in an image stream (3/3)
+
+.code mincapturem.go /^func trackRects/,$
+
+* Complete code for finding areas of activity in an image stream (playable)
+
+.play mincapturemlib.go
+
+* Performance in general
+
+- forget about opencv
+- cut out the middleman, use v4l directly
+- avoid disk i/o
+- avoid allocation - see e.g. rectjoiner.removeAboveY()
+
+* Optimizations
+
+- look at each pixel as few times as possible, ideally once
+- per-pixel operations should be *very* cheap (e.g. avoid division)
+- use linear access patterns
+- don't use image library - At() kills
+- see yuyv_test in my imglib repo for benchmarks
+
+* Image formats
+
+- use YUYV directly for average/delta computation
+- 2/3 the bytes of RGB, 1/2 the bytes of RGBA
+- lossy conversion to RGB, best to delay it
+
+* Algorithms
+
+- forget about edge detection, gaussian, convolving kernels
+- take rolling average of last N frames, compare that to current frame
+- threshold deltas, join neighbours to make rectangles
+- filter rectangles by area and squareness
+- (later) apply physics model to make sense of rectangles
+
+* Averages
+
+- window size hardcoded to a power of 2 for fast divide in avg()
+.code deltas.go /^func \(l lnsum\) div/,/^}/
+- use ringbuf of old frames, compute rollavg carefully
+.code deltas.go /^func \(l lnsum\) roll/,/^}/
+.code deltas.go /^func \(lns lnsumslc\) rollSumDelta/,/^}/
+- note that we don't treat the image data as images, just bytes
+
+* Rectangles And Slates
+
+- slate: []byte and []rect indexed by x
+- consecutive interesting pixels form 1D rectangles
+- draw rect to slate: increment all x values rect covers
+- add rect to slate:
+  for each x in rect.Inset(-1)
+    if slate[x] != lastc
+      rect = union(rect, rects[x])
+      rects[x] = image.ZR
+      lastc = slate[x]
+  draw rect to slate
+      
+* Rectangle Merge
+
+- if no rects found on a row, wipe slate, mark all in-progress rects done
+- otherwise merge 1d rects with existing in-progress 2d rects using slate
+1. wipe slate
+2. draw all in-progress rects to slate
+3. add all the new 1d rects to slate
+4. mark done all the in-progress rects that don't extend to current row
+
+#Further Text, including invocations like:
+#
+#.code x.go /^func main/,/^}/
+#.play y.go
+#.image image.jpg
+#.iframe http://foo
+#.link http://foo label
+#.html file.html
+
