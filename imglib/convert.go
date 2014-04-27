@@ -56,8 +56,9 @@ func (si StdImage) GetRGBA() *image.RGBA {
 // an RGBA type. This is *slow*.
 func convertImageWithAt(dest *image.RGBA, src image.Image) {
 	i := 0
-	for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
-		for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
+	srcrect := src.Bounds()
+	for y := srcrect.Min.Y; y < srcrect.Max.Y; y++ {
+		for x := srcrect.Min.X; x < srcrect.Max.X; x++ {
 			r, g, b, a := src.At(x, y).RGBA()
 			dest.Pix[i+0] = uint8(r >> 8)
 			dest.Pix[i+1] = uint8(g >> 8)
